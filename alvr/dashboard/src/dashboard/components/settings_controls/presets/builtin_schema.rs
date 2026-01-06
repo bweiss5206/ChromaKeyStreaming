@@ -302,7 +302,7 @@ pub fn game_audio_schema() -> PresetSchemaNode {
         name: "Headset speaker".into(),
         strings: [(
             "notice".into(),
-            "You can change the default audio device from the system taskbar tray (bottom right)"
+            "You can change the default audio device from the system taskbar tray (bottom right), then restart SteamVR"
                 .into(),
         )]
         .into_iter()

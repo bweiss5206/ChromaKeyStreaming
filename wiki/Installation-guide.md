@@ -36,8 +36,28 @@ To use your microphone in ALVR on Windows you need to install **Virtual Audio Ca
 
 ### **3. Configure ALVR**
 1. **Open ALVR** and go to **Settings**.
-2. Set **Headset Speaker** → **System Default**.
-3. Set **Headset Microphone** → **Automatic** or **Virtual Audio Cable**.
+2. Set **Headset Microphone** → **Automatic** or **Virtual Audio Cable**.
+
+## Speaker Setup on Windows
+
+ALVR uses your default audio output device. This means the same audio is going into your headset, and through your desktop speakers.
+
+If you're able to physically turn off your audio output device, then do so, so that the audio only comes out of the headset. You're done!
+
+If not, then you'll need a *second* virtual audio cable. [Voicemeeter Potato](https://vb-audio.com/Voicemeeter/potato.htm) gives you several.
+
+### **1. Install or Reinstall Voicemeeter Potato**
+
+### **2. Configure Windows Sound Settings**
+1. **Open** Windows Sound Settings (`Win + I` → "Sound").
+2. Set **Output** → **Voicemeeter AUX Input**.
+
+### **3. Configure ALVR**
+1. **Open ALVR** and go to **Settings**.
+2. Set **Headset Microphone** → **Automatic** or **VoiceMeeter**.
+
+### **4. Restart SteamVR**
+1. **Open ALVR** and click **Restart SteamVR**.
 
 ## Advanced installation
 
