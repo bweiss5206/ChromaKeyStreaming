@@ -1,7 +1,7 @@
 Client OpenXR implementation guidance (Meta LUT overlay)
 
 Primary reference
-- docs/meta_lut_overlay_execplan.md
+-meta_lut_overlay_execplan.md
 
 Expected files to touch
 - alvr/session/src/settings.rs
