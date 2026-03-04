@@ -14,24 +14,33 @@ struct FfiQuat {
     float w;
 };
 
+struct FfiPose {
+    FfiQuat orientation;
+    float position[3];
+};
+
+struct FfiDeviceMotion {
+    unsigned long long deviceID;
+    FfiPose pose;
+    float linearVelocity[3];
+    float angularVelocity[3];
+};
+
+struct FfiViewParams {
+    FfiPose pose;
+    FfiFov fov;
+};
+
 struct FfiHandSkeleton {
     float jointPositions[31][3];
     FfiQuat jointRotations[31];
 };
 
-struct FfiDeviceMotion {
-    unsigned long long deviceID;
-    FfiQuat orientation;
-    float position[3];
-    float linearVelocity[3];
-    float angularVelocity[3];
-};
-
-struct FfiBodyTracker {
-    unsigned int trackerID;
-    FfiQuat orientation;
-    float position[3];
-    unsigned int tracking;
+struct FfiHandData {
+    const FfiDeviceMotion* controllerMotion;
+    const FfiHandSkeleton* handSkeleton;
+    bool isHandTracker;
+    bool predictHandSkeleton;
 };
 
 enum FfiOpenvrPropertyType {
@@ -58,11 +67,6 @@ struct FfiOpenvrProperty {
     unsigned int key;
     FfiOpenvrPropertyType type;
     FfiOpenvrPropertyValue value;
-};
-
-struct FfiViewsConfig {
-    FfiFov fov[2];
-    float ipd_m;
 };
 
 enum FfiButtonType {
@@ -113,6 +117,7 @@ extern "C" void (*LogError)(const char* stringPtr);
 extern "C" void (*LogWarn)(const char* stringPtr);
 extern "C" void (*LogInfo)(const char* stringPtr);
 extern "C" void (*LogDebug)(const char* stringPtr);
+extern "C" void (*LogEncoder)(const char* stringPtr);
 extern "C" void (*LogPeriodically)(const char* tag, const char* stringPtr);
 extern "C" void (*DriverReadyIdle)(bool setDefaultChaprone);
 extern "C" void (*SetVideoConfigNals)(const unsigned char* configBuffer, int len, int codec);
@@ -128,36 +133,35 @@ extern "C" void (*ReportPresent)(unsigned long long timestamp_ns, unsigned long 
 extern "C" void (*ReportComposed)(unsigned long long timestamp_ns, unsigned long long offset_ns);
 extern "C" FfiDynamicEncoderParams (*GetDynamicEncoderParams)();
 extern "C" unsigned long long (*GetSerialNumber)(unsigned long long deviceID, char* outString);
-extern "C" void (*SetOpenvrProps)(unsigned long long deviceID);
-extern "C" void (*RegisterButtons)(unsigned long long deviceID);
+extern "C" void (*SetOpenvrProps)(void* instancePtr, unsigned long long deviceID);
+extern "C" void (*RegisterButtons)(void* instancePtr, unsigned long long deviceID);
 extern "C" void (*WaitForVSync)();
 
-extern "C" void CppInit();
+extern "C" void CppInit(bool earlyHmdInitialization);
 extern "C" void* CppOpenvrEntryPoint(const char* pInterfaceName, int* pReturnCode);
-extern "C" void InitializeStreaming();
+extern "C" bool InitializeStreaming();
 extern "C" void DeinitializeStreaming();
 extern "C" void SendVSync();
 extern "C" void RequestIDR();
 extern "C" void SetTracking(
     unsigned long long targetTimestampNs,
     float controllerPoseTimeOffsetS,
-    const FfiDeviceMotion* deviceMotions,
-    int motionsCount,
-    const FfiHandSkeleton* leftHand,
-    const FfiHandSkeleton* rightHand,
-    unsigned int controllersTracked,
-    const FfiBodyTracker* bodyTrackers,
-    int bodyTrackersCount
+    FfiDeviceMotion headMotion,
+    FfiHandData leftHandData,
+    FfiHandData rightHandData,
+    const FfiDeviceMotion* bodyTrackerMotions,
+    int bodyTrackerMotionCount
 );
-extern "C" void VideoErrorReportReceive();
 extern "C" void RequestDriverResync();
 extern "C" void ShutdownSteamvr();
 
-extern "C" void SetOpenvrProperty(unsigned long long deviceID, FfiOpenvrProperty prop);
-extern "C" void RegisterButton(unsigned long long buttonID);
-extern "C" void SetViewsConfig(FfiViewsConfig config);
+extern "C" void SetOpenvrProperty(void* instancePtr, FfiOpenvrProperty prop);
+extern "C" void SetOpenvrPropByDeviceID(unsigned long long deviceID, FfiOpenvrProperty prop);
+extern "C" void RegisterButton(void* instancePtr, unsigned long long buttonID);
+extern "C" void SetLocalViewParams(const FfiViewParams params[2]);
 extern "C" void SetBattery(unsigned long long deviceID, float gauge_value, bool is_plugged);
 extern "C" void SetButton(unsigned long long buttonID, FfiButtonValue value);
+extern "C" void SetProximityState(bool headset_is_worn);
 
 extern "C" void InitOpenvrClient();
 extern "C" void ShutdownOpenvrClient();

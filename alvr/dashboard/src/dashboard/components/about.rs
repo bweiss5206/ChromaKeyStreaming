@@ -1,6 +1,6 @@
 use alvr_common::ALVR_VERSION;
 use alvr_gui_common::theme;
-use eframe::egui::{self, Frame, RichText, ScrollArea, Ui};
+use eframe::egui::{Frame, RichText, ScrollArea, Ui};
 
 pub fn about_tab_ui(ui: &mut Ui) {
     ui.label(RichText::new(format!("ALVR streamer v{}", *ALVR_VERSION)).size(30.0));
@@ -19,10 +19,10 @@ pub fn about_tab_ui(ui: &mut Ui) {
     ui.label("License:");
     Frame::group(ui.style())
         .fill(theme::DARKER_BG)
-        .inner_margin(egui::vec2(15.0, 12.0))
+        .inner_margin(theme::FRAME_PADDING)
         .show(ui, |ui| {
             ScrollArea::new([false, true])
-                .id_source("license_scroll")
+                .id_salt("license_scroll")
                 .show(ui, |ui| ui.label(include_str!("../../../../../LICENSE")))
         });
 }

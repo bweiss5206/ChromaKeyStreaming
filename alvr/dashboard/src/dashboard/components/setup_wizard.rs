@@ -1,5 +1,4 @@
-use crate::dashboard::basic_components;
-use alvr_packets::{FirewallRulesAction, PathValuePair, ServerRequest};
+use crate::dashboard::ServerRequest;
 use eframe::{
     egui::{Button, Label, Layout, RichText, Ui},
     emath::Align,
@@ -16,10 +15,9 @@ enum Page {
     ResetSettings = 1,
     HardwareRequirements = 2,
     SoftwareRequirements = 3,
-    HandGestures = 4,
-    Firewall = 5,
-    Recommendations = 6,
-    Finished = 7,
+    Firewall = 4,
+    Recommendations = 5,
+    Finished = 6,
 }
 
 fn index_to_page(index: usize) -> Page {
@@ -28,11 +26,10 @@ fn index_to_page(index: usize) -> Page {
         1 => Page::ResetSettings,
         2 => Page::HardwareRequirements,
         3 => Page::SoftwareRequirements,
-        4 => Page::HandGestures,
-        5 => Page::Firewall,
-        6 => Page::Recommendations,
-        7 => Page::Finished,
-        _ => unreachable!(),
+        4 => Page::Firewall,
+        5 => Page::Recommendations,
+        6 => Page::Finished,
+        _ => panic!("Invalid page index"),
     }
 }
 
@@ -59,14 +56,12 @@ fn page_content(
 
 pub struct SetupWizard {
     page: Page,
-    only_touch: bool,
 }
 
 impl SetupWizard {
     pub fn new() -> Self {
         Self {
             page: Page::Welcome,
-            only_touch: true,
         }
     }
 
@@ -110,7 +105,7 @@ impl SetupWizard {
             Page::HardwareRequirements => page_content(
                 ui,
                 "Hardware requirements",
-                r"ALVR requires a dedicated and recent graphics card.
+                r"ALVR requires a dedicated and recent graphics card. Low-end Intel integrated graphics may fail to work.
 Make sure you have at least one output audio device.",
                 |_| (),
             ),
@@ -118,37 +113,18 @@ Make sure you have at least one output audio device.",
                 ui,
                 "Software requirements",
                 if cfg!(windows) {
-                    r"To stream the headset microphone on Windows you need to install VB-Cable or Voicemeeter."
+                    r"To stream the headset microphone on Windows you need to install Virtual Audio Cable, VB-Cable, Voicemeeter"
+                } else if cfg!(target_os = "linux") {
+                    r"You need the PipeWire (0.3.49+ version) audio system to be able to stream audio and use microphone."
                 } else {
                     r"Unsupported OS"
                 },
                 #[allow(unused_variables)]
                 |ui| {
                     #[cfg(windows)]
-                    if ui.button("Download VB-Cable").clicked() {
-                        ui.ctx().open_url(crate::dashboard::egui::OpenUrl::same_tab(
-                            "https://vb-audio.com/Cable/",
-                        ));
-                    }
-                },
-            ),
-
-            Page::HandGestures => page_content(
-                ui,
-                "Hand Gestures",
-                r"ALVR allows you to use Hand Tracking and emulate controller buttons using it.
-By default, controller button emulation is set to prevent accidental clicks. You can re-enable gestures by disabling slider bellow.",
-                |ui| {
-                    ui.label("Only touch");
-                    if basic_components::switch(ui, &mut self.only_touch).changed() {
-                        request = Some(SetupWizardRequest::ServerRequest(
-                            ServerRequest::SetValues(vec![PathValuePair {
-                                path: alvr_packets::parse_path(&format!(
-                                    "session_settings.headset.controllers.content.{}",
-                                    "gestures.content.only_touch"
-                                )),
-                                value: serde_json::Value::Bool(self.only_touch),
-                            }]),
+                    if ui.button("Download Virtual Audio Cable (Lite)").clicked() {
+                        ui.ctx().open_url(eframe::egui::OpenUrl::same_tab(
+                            "https://software.muzychenko.net/freeware/vac470lite.zip",
                         ));
                     }
                 },
@@ -161,7 +137,7 @@ This requires administrator rights!",
                 |ui| {
                     if ui.button("Add firewall rules").clicked() {
                         request = Some(SetupWizardRequest::ServerRequest(
-                            ServerRequest::FirewallRules(FirewallRulesAction::Add),
+                            ServerRequest::AddFirewallRules,
                         ));
                     }
                 },
@@ -169,7 +145,7 @@ This requires administrator rights!",
             Page::Recommendations => page_content(
                 ui,
                 "Recommendations",
-                r"ALVR supports multiple types of PC hardware and headsets but not all might work correctly with default settings. Please try tweaking different settings like encoder, bitrate and others if your ALVR experience is great or not optimal.",
+                r"ALVR supports multiple types of PC hardware and headsets but not all might work correctly with default settings. Please try tweaking different settings like resolution, bitrate, encoder and others if your ALVR experience is not optimal.",
                 |_| (),
             ),
             Page::Finished => page_content(

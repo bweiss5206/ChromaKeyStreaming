@@ -1,31 +1,34 @@
 mod c_api;
+mod extra_extensions;
 mod graphics;
 mod interaction;
 mod lobby;
+mod passthrough;
 mod stream;
 
-use crate::stream::StreamConfig;
-use alvr_client_core::{
-    graphics::GraphicsContext, ClientCapabilities, ClientCoreContext, ClientCoreEvent, Platform,
-};
+use crate::stream::ParsedStreamConfig;
+use alvr_client_core::{ClientCapabilities, ClientCoreContext, ClientCoreEvent};
 use alvr_common::{
-    error,
+    Fov, HAND_LEFT_ID, Pose, debug, error,
     glam::{Quat, UVec2, Vec3},
-    info, Fov, Pose, HAND_LEFT_ID,
+    info,
+    parking_lot::RwLock,
 };
+use alvr_graphics::GraphicsContext;
+use alvr_session::{BodyTrackingBDConfig, BodyTrackingSourcesConfig, PerformanceLevel};
+use alvr_system_info::Platform;
+use extra_extensions::{
+    BD_BODY_TRACKING_EXTENSION_NAME, BD_MOTION_TRACKING_EXTENSION_NAME,
+    META_BODY_TRACKING_FIDELITY_EXTENSION_NAME, META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
+    META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+    META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME, PICO_CONFIGURATION_EXTENSION_NAME,
+};
+use interaction::{InteractionContext, InteractionSourcesConfig};
 use lobby::Lobby;
 use openxr as xr;
-use std::{
-    path::Path,
-    rc::Rc,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
+use passthrough::PassthroughLayer;
+use std::{ffi::CStr, path::Path, rc::Rc, sync::Arc, thread, time::Duration};
 use stream::StreamContext;
-use xr::ColorSpaceFB;
-
-const DECODER_MAX_TIMEOUT_MULTIPLIER: f32 = 0.8;
 
 fn from_xr_vec3(v: xr::Vector3f) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
@@ -84,15 +87,38 @@ fn to_xr_fov(f: Fov) -> xr::Fovf {
     }
 }
 
+fn from_xr_time(timestamp: xr::Time) -> Duration {
+    Duration::from_nanos(timestamp.as_nanos() as _)
+}
+
 fn to_xr_time(timestamp: Duration) -> xr::Time {
     xr::Time::from_nanos(timestamp.as_nanos() as _)
 }
 
-#[derive(Clone)]
-pub struct XrContext {
-    instance: xr::Instance,
-    system: xr::SystemId,
-    session: xr::Session<xr::OpenGlEs>,
+fn to_perf_settings_level(level: PerformanceLevel) -> xr::PerfSettingsLevelEXT {
+    match level {
+        PerformanceLevel::PowerSavings => xr::PerfSettingsLevelEXT::POWER_SAVINGS,
+        PerformanceLevel::SustainedLow => xr::PerfSettingsLevelEXT::SUSTAINED_LOW,
+        PerformanceLevel::SustainedHigh => xr::PerfSettingsLevelEXT::SUSTAINED_HIGH,
+        PerformanceLevel::Boost => xr::PerfSettingsLevelEXT::BOOST,
+    }
+}
+
+fn set_performance_level(
+    xr_instance: &xr::Instance,
+    xr_session: &xr::Session<xr::OpenGlEs>,
+    domain: xr::PerfSettingsDomainEXT,
+    level: PerformanceLevel,
+) {
+    if let Some(performance_settings) = xr_instance.exts().ext_performance_settings {
+        unsafe {
+            (performance_settings.perf_settings_set_performance_level)(
+                xr_session.as_raw(),
+                domain,
+                to_perf_settings_level(level),
+            );
+        }
+    }
 }
 
 fn default_view() -> xr::View {
@@ -115,17 +141,42 @@ fn default_view() -> xr::View {
     }
 }
 
+// This exists to circumvent dead-code analysis
+fn create_session(
+    xr_instance: &xr::Instance,
+    xr_system: xr::SystemId,
+    graphics_context: &GraphicsContext,
+) -> (
+    xr::Session<xr::OpenGlEs>,
+    xr::FrameWaiter,
+    xr::FrameStream<xr::OpenGlEs>,
+) {
+    #[allow(unreachable_code)]
+    unsafe {
+        xr_instance
+            .create_session(xr_system, &graphics::session_create_info(graphics_context))
+            .unwrap()
+    }
+}
+
 pub fn entry_point() {
     alvr_client_core::init_logging();
 
-    let platform = alvr_client_core::platform();
+    const LEGACY_OPENXR_VERSION: xr::Version = xr::Version::new(1, 0, 34);
+    const CURRENT_OPENXR_VERSION: xr::Version = xr::Version::new(1, 1, 36);
 
-    let loader_suffix = match platform {
-        Platform::Quest1 => "_quest1",
-        Platform::PicoNeo3 | Platform::Pico4 => "_pico",
-        Platform::Yvr => "_yvr",
-        Platform::Lynx => "_lynx",
-        _ => "",
+    // Using a provisional platform, before we can get the runtime info
+    let (loader_suffix, openxr_version) = match alvr_system_info::platform(None, None) {
+        Platform::Quest1 => ("_quest1", LEGACY_OPENXR_VERSION),
+        Platform::PicoNeo3
+        | Platform::PicoG3
+        | Platform::Pico4
+        | Platform::Pico4Pro
+        | Platform::Pico4Enterprise => ("_pico_old", LEGACY_OPENXR_VERSION),
+        p if p.is_vive() => ("", LEGACY_OPENXR_VERSION),
+        p if p.is_yvr() => ("_yvr", LEGACY_OPENXR_VERSION),
+        Platform::Lynx => ("_lynx", LEGACY_OPENXR_VERSION),
+        _ => ("", CURRENT_OPENXR_VERSION),
     };
     let xr_entry = unsafe {
         xr::Entry::load_from(Path::new(&format!("libopenxr_loader{loader_suffix}.so"))).unwrap()
@@ -135,7 +186,19 @@ pub fn entry_point() {
     xr_entry.initialize_android_loader().unwrap();
 
     let available_extensions = xr_entry.enumerate_extensions().unwrap();
-    alvr_common::info!("OpenXR available extensions: {available_extensions:#?}");
+    info!("OpenXR available extensions: {available_extensions:#?}");
+    info!(
+        "Extra available extensions: {:#?}",
+        available_extensions
+            .other
+            .iter()
+            .map(|vec| CStr::from_bytes_with_nul(vec)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned())
+            .collect::<Vec<_>>()
+    );
 
     // todo: switch to vulkan
     assert!(available_extensions.khr_opengl_es_enable);
@@ -145,16 +208,20 @@ pub fn entry_point() {
     exts.ext_eye_gaze_interaction = available_extensions.ext_eye_gaze_interaction;
     exts.ext_hand_tracking = available_extensions.ext_hand_tracking;
     exts.ext_local_floor = available_extensions.ext_local_floor;
+    exts.ext_performance_settings = available_extensions.ext_performance_settings;
+    exts.ext_user_presence = available_extensions.ext_user_presence;
+    exts.fb_body_tracking = available_extensions.fb_body_tracking;
     exts.fb_color_space = available_extensions.fb_color_space;
+    exts.fb_composition_layer_settings = available_extensions.fb_composition_layer_settings;
     exts.fb_display_refresh_rate = available_extensions.fb_display_refresh_rate;
     exts.fb_eye_tracking_social = available_extensions.fb_eye_tracking_social;
     exts.fb_face_tracking2 = available_extensions.fb_face_tracking2;
-    exts.fb_body_tracking = available_extensions.fb_body_tracking;
-    exts.meta_body_tracking_full_body = available_extensions.meta_body_tracking_full_body;
     exts.fb_foveation = available_extensions.fb_foveation;
     exts.fb_foveation_configuration = available_extensions.fb_foveation_configuration;
+    exts.fb_passthrough = available_extensions.fb_passthrough;
     exts.fb_swapchain_update_state = available_extensions.fb_swapchain_update_state;
     exts.htc_facial_tracking = available_extensions.htc_facial_tracking;
+    exts.htc_passthrough = available_extensions.htc_passthrough;
     exts.htc_vive_focus3_controller_interaction =
         available_extensions.htc_vive_focus3_controller_interaction;
     #[cfg(target_os = "android")]
@@ -163,9 +230,37 @@ pub fn entry_point() {
     }
     exts.khr_convert_timespec_time = true;
     exts.khr_opengl_es_enable = true;
+    exts.other = available_extensions
+        .other
+        .into_iter()
+        .filter(|ext| {
+            [
+                META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
+                META_BODY_TRACKING_FIDELITY_EXTENSION_NAME,
+                META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
+                META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+                BD_BODY_TRACKING_EXTENSION_NAME,
+                BD_MOTION_TRACKING_EXTENSION_NAME,
+                PICO_CONFIGURATION_EXTENSION_NAME,
+            ]
+            .contains(&CStr::from_bytes_with_nul(ext).unwrap().to_str().unwrap())
+        })
+        .collect();
 
     let available_layers = xr_entry.enumerate_layers().unwrap();
-    alvr_common::info!("OpenXR available layers: {available_layers:#?}");
+    info!("OpenXR available layers: {available_layers:#?}");
+
+    let other_exts = exts
+        .other
+        .iter()
+        .map(|vec| {
+            CStr::from_bytes_with_nul(vec)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
 
     let xr_instance = xr_entry
         .create_instance(
@@ -174,16 +269,27 @@ pub fn entry_point() {
                 application_version: 0,
                 engine_name: "ALVR",
                 engine_version: 0,
+                api_version: openxr_version,
             },
             &exts,
             &[],
         )
         .unwrap();
 
+    let platform = alvr_system_info::platform(
+        xr_instance
+            .properties()
+            .ok()
+            .map(|s| s.runtime_name.to_owned()),
+        xr_instance
+            .properties()
+            .ok()
+            .map(|s| s.runtime_version.into_raw()),
+    );
+
     let graphics_context = Rc::new(GraphicsContext::new_gl());
 
     let mut last_lobby_message = String::new();
-    let mut stream_config = None::<StreamConfig>;
 
     'session_loop: loop {
         let xr_system = xr_instance
@@ -195,17 +301,8 @@ pub fn entry_point() {
             .graphics_requirements::<xr::OpenGlEs>(xr_system)
             .unwrap();
 
-        let (xr_session, mut xr_frame_waiter, mut xr_frame_stream) = unsafe {
-            xr_instance
-                .create_session(xr_system, &graphics::session_create_info(&graphics_context))
-                .unwrap()
-        };
-
-        let xr_context = XrContext {
-            instance: xr_instance.clone(),
-            system: xr_system,
-            session: xr_session.clone(),
-        };
+        let (xr_session, mut xr_frame_waiter, mut xr_frame_stream) =
+            create_session(&xr_instance, xr_system, &graphics_context);
 
         let views_config = xr_instance
             .enumerate_view_configuration_views(
@@ -220,6 +317,11 @@ pub fn entry_point() {
             views_config[0].recommended_image_rect_height,
         );
 
+        let max_view_resolution = UVec2::new(
+            views_config[0].max_image_rect_width,
+            views_config[0].max_image_rect_height,
+        );
+
         let refresh_rates = if exts.fb_display_refresh_rate {
             xr_session.enumerate_display_refresh_rates().unwrap()
         } else {
@@ -227,42 +329,72 @@ pub fn entry_point() {
         };
 
         if exts.fb_color_space {
-            xr_session.set_color_space(ColorSpaceFB::P3).unwrap();
+            xr_session
+                .set_color_space(xr::ColorSpaceFB::REC709)
+                .unwrap();
         }
 
         let capabilities = ClientCapabilities {
+            platform,
             default_view_resolution,
-            external_decoder: false,
+            max_view_resolution,
             refresh_rates,
             foveated_encoding: platform != Platform::Unknown,
             encoder_high_profile: platform != Platform::Unknown,
             encoder_10_bits: platform != Platform::Unknown,
-            encoder_av1: platform == Platform::Quest3,
+            encoder_av1: matches!(
+                platform,
+                Platform::Quest3 | Platform::Quest3S | Platform::Pico4Ultra
+            ),
+            prefer_10bit: false,
+            preferred_encoding_gamma: 1.0,
+            prefer_hdr: false,
         };
         let core_context = Arc::new(ClientCoreContext::new(capabilities));
 
-        let interaction_context = Arc::new(interaction::initialize_interaction(
-            &xr_context,
+        let interaction_context = Arc::new(RwLock::new(InteractionContext::new(
+            xr_session.clone(),
+            other_exts.clone(),
+            xr_system,
             platform,
-            stream_config
-                .as_ref()
-                .and_then(|c| c.face_sources_config.clone()),
-            stream_config
-                .as_ref()
-                .and_then(|c| c.body_sources_config.clone()),
-        ));
+        )));
 
         let mut lobby = Lobby::new(
-            &xr_context,
+            xr_session.clone(),
             Rc::clone(&graphics_context),
             Arc::clone(&interaction_context),
-            default_view_resolution,
+            platform,
+            UVec2::min(default_view_resolution * 2, max_view_resolution),
             &last_lobby_message,
         );
+
+        // For Meta/Quest enabling body tracking would disable multimodal input
+        let lobby_body_tracking_config = if platform.is_pico() {
+            Some(BodyTrackingSourcesConfig {
+                bd: BodyTrackingBDConfig::BodyTracking {
+                    high_accuracy: true,
+                    prompt_calibration_on_start: false,
+                },
+                meta: Default::default(),
+            })
+        } else {
+            None
+        };
+        let lobby_interaction_sources = InteractionSourcesConfig {
+            face_tracking: None,
+            body_tracking: lobby_body_tracking_config,
+            prefers_multimodal_input: true,
+        };
+        interaction_context
+            .write()
+            .select_sources(&lobby_interaction_sources);
+
         let mut session_running = false;
         let mut stream_context = None::<StreamContext>;
+        let mut passthrough_layer = None;
 
         let mut event_storage = xr::EventDataBuffer::new();
+        let mut headset_is_worn = true;
         'render_loop: loop {
             while let Some(event) = xr_instance.poll_event(&mut event_storage).unwrap() {
                 match event {
@@ -278,17 +410,22 @@ pub fn entry_point() {
 
                             core_context.resume();
 
+                            passthrough_layer = PassthroughLayer::new(&xr_session, platform).ok();
+
                             session_running = true;
                         }
                         xr::SessionState::STOPPING => {
                             session_running = false;
 
+                            passthrough_layer = None;
+
                             core_context.pause();
 
                             xr_session.end().unwrap();
                         }
-                        xr::SessionState::EXITING => break 'render_loop,
-                        xr::SessionState::LOSS_PENDING => break 'render_loop,
+                        xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
+                            break 'render_loop;
+                        }
                         _ => (),
                     },
                     xr::Event::ReferenceSpaceChangePending(event) => {
@@ -299,8 +436,8 @@ pub fn entry_point() {
 
                         lobby.update_reference_space();
 
-                        if let Some(context) = &mut stream_context {
-                            context.update_reference_space();
+                        if let Some(stream) = &mut stream_context {
+                            stream.update_reference_space();
                         }
                     }
                     xr::Event::PerfSettingsEXT(event) => {
@@ -312,11 +449,19 @@ pub fn entry_point() {
                             event.sub_domain(),
                         );
                     }
-                    xr::Event::InteractionProfileChanged(_) => {
+                    xr::Event::InteractionProfileChanged(_)
+                    | xr::Event::PassthroughStateChangedFB(_) => {
                         // todo
                     }
-                    xr::Event::PassthroughStateChangedFB(_) => {
-                        // todo
+                    xr::Event::UserPresenceChangedEXT(event) => {
+                        debug!("user present: {:?}", event.is_user_present());
+                        headset_is_worn = event.is_user_present();
+
+                        core_context.send_proximity_state(event.is_user_present());
+                    }
+                    xr::Event::Unknown => {
+                        // use event_storage.as_raw(), reinterpret as sys::BaseInStructure, get type
+                        // and then reinterpret as the event struct
                     }
                     _ => (),
                 }
@@ -333,39 +478,34 @@ pub fn entry_point() {
                         last_lobby_message.clone_from(&message);
                         lobby.update_hud_message(&message);
                     }
-                    ClientCoreEvent::StreamingStarted {
-                        settings,
-                        negotiated_config,
-                    } => {
-                        let new_config = StreamConfig::new(&settings, negotiated_config);
+                    ClientCoreEvent::StreamingStarted(config) => {
+                        let config = ParsedStreamConfig::new(&config);
 
-                        // combined_eye_gaze is a setting that needs to be enabled at session
-                        // creation. Since HTC headsets don't support session reinitialization, skip
-                        // all elements that need it, that is face and eye tracking.
-                        if stream_config.as_ref() != Some(&new_config)
-                            && !matches!(
-                                platform,
-                                Platform::Focus3 | Platform::XRElite | Platform::ViveUnknown
-                            )
-                        {
-                            stream_config = Some(new_config);
-
-                            xr_session.request_exit().ok();
-                            continue;
-                        }
-
-                        stream_context = Some(StreamContext::new(
+                        let context = StreamContext::new(
                             Arc::clone(&core_context),
-                            xr_context.clone(),
+                            xr_session.clone(),
                             Rc::clone(&graphics_context),
                             Arc::clone(&interaction_context),
-                            platform,
-                            &new_config,
-                        ));
+                            config,
+                        );
 
-                        stream_config = Some(new_config);
+                        if !context.uses_passthrough() {
+                            passthrough_layer = None;
+                        }
+
+                        stream_context = Some(context);
+
+                        core_context.send_proximity_state(headset_is_worn);
                     }
                     ClientCoreEvent::StreamingStopped => {
+                        if passthrough_layer.is_none() {
+                            passthrough_layer = PassthroughLayer::new(&xr_session, platform).ok();
+                        }
+
+                        interaction_context
+                            .write()
+                            .select_sources(&lobby_interaction_sources);
+
                         stream_context = None;
                     }
                     ClientCoreEvent::Haptics {
@@ -374,25 +514,54 @@ pub fn entry_point() {
                         frequency,
                         amplitude,
                     } => {
-                        let action = if device_id == *HAND_LEFT_ID {
-                            &interaction_context.hands_interaction[0].vibration_action
-                        } else {
-                            &interaction_context.hands_interaction[1].vibration_action
-                        };
+                        let idx = if device_id == *HAND_LEFT_ID { 0 } else { 1 };
+                        let action =
+                            &interaction_context.read().hands_interaction[idx].vibration_action;
 
                         action
                             .apply_feedback(
                                 &xr_session,
                                 xr::Path::NULL,
                                 &xr::HapticVibration::new()
-                                    .amplitude(amplitude)
-                                    .frequency(frequency)
+                                    .amplitude(amplitude.clamp(0.0, 1.0))
+                                    .frequency(frequency.max(0.0))
                                     .duration(xr::Duration::from_nanos(duration.as_nanos() as _)),
                             )
                             .unwrap();
                     }
-                    ClientCoreEvent::DecoderConfig { .. } | ClientCoreEvent::FrameReady { .. } => {
-                        panic!()
+                    ClientCoreEvent::DecoderConfig { codec, config_nal } => {
+                        if let Some(stream) = &mut stream_context {
+                            stream.maybe_initialize_decoder(codec, config_nal);
+                        }
+                    }
+                    ClientCoreEvent::RealTimeConfig(config) => {
+                        if config.passthrough.is_some() && passthrough_layer.is_none() {
+                            passthrough_layer = PassthroughLayer::new(&xr_session, platform).ok();
+                        } else if config.passthrough.is_none() && passthrough_layer.is_some() {
+                            passthrough_layer = None;
+                        }
+
+                        if let Some(cpu_performance_level) = &config.cpu_performance_level {
+                            set_performance_level(
+                                &xr_instance,
+                                &xr_session,
+                                xr::PerfSettingsDomainEXT::CPU,
+                                cpu_performance_level.clone(),
+                            );
+                        }
+
+                        if let Some(gpu_performance_level) = &config.gpu_performance_level {
+                            set_performance_level(
+                                &xr_instance,
+                                &xr_session,
+                                xr::PerfSettingsDomainEXT::GPU,
+                                gpu_performance_level.clone(),
+                            );
+                        }
+
+                        if let Some(stream) = &mut stream_context {
+                            stream.update_real_time_config(&config);
+                        }
                     }
                 }
             }
@@ -424,48 +593,39 @@ pub fn entry_point() {
             }
 
             // todo: allow rendering lobby and stream layers at the same time and add cross fade
-            let (layer, display_time) = if let Some(context) = &mut stream_context {
-                let frame_poll_deadline = Instant::now()
-                    + Duration::from_secs_f32(
-                        frame_interval.as_secs_f32() * DECODER_MAX_TIMEOUT_MULTIPLIER,
-                    );
-                let mut frame_result = None;
-                while frame_result.is_none() && Instant::now() < frame_poll_deadline {
-                    frame_result = core_context.get_frame();
-                    thread::yield_now();
-                }
-
-                let timestamp = frame_result
-                    .as_ref()
-                    .map(|r| r.timestamp)
-                    .unwrap_or(vsync_time);
-
-                let layer = context.render(frame_result, vsync_time);
-
-                (layer, timestamp)
+            let (layer, display_time) = if let Some(stream) = &mut stream_context {
+                stream.render(frame_interval, vsync_time)
             } else {
-                let layer = lobby.render(frame_state.predicted_display_time);
-
-                (layer, vsync_time)
+                (lobby.render(vsync_time), vsync_time)
             };
 
+            let layers: &[&xr::CompositionLayerBase<_>] =
+                if let Some(passthrough_layer) = &passthrough_layer {
+                    &[passthrough_layer, &layer.build()]
+                } else {
+                    &[&layer.build()]
+                };
+
+            graphics_context.make_current();
             let res = xr_frame_stream.end(
                 to_xr_time(display_time),
                 xr::EnvironmentBlendMode::OPAQUE,
-                &[&layer.build()],
+                layers,
             );
 
             if let Err(e) = res {
                 let time = to_xr_time(display_time);
                 error!("End frame failed! {e}, timestamp: {display_time:?}, time: {time:?}");
 
-                xr_frame_stream
-                    .end(
-                        frame_state.predicted_display_time,
-                        xr::EnvironmentBlendMode::OPAQUE,
-                        &[],
-                    )
-                    .unwrap();
+                if !platform.is_vive() {
+                    xr_frame_stream
+                        .end(
+                            frame_state.predicted_display_time,
+                            xr::EnvironmentBlendMode::OPAQUE,
+                            &[],
+                        )
+                        .unwrap();
+                }
             }
         }
     }
@@ -474,14 +634,15 @@ pub fn entry_point() {
 }
 
 #[allow(unused)]
-fn xr_runtime_now(xr_instance: &xr::Instance) -> Option<Duration> {
-    let time_nanos = xr_instance.now().ok()?.as_nanos();
-
-    (time_nanos > 0).then(|| Duration::from_nanos(time_nanos as _))
+fn xr_runtime_now(xr_instance: &xr::Instance) -> Option<xr::Time> {
+    xr_instance
+        .now()
+        .ok()
+        .filter(|&time_nanos| time_nanos.as_nanos() > 0)
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn android_main(app: android_activity::AndroidApp) {
     use android_activity::{InputStatus, MainEvent, PollEvent};
 

@@ -4,6 +4,7 @@
 #include "alvr_server/Settings.h"
 #include "ffmpeg_helper.h"
 #include <chrono>
+#include <memory>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -63,16 +64,18 @@ alvr::EncodePipelineNvEnc::EncodePipelineNvEnc(
     Renderer* render,
     VkContext& vk_ctx,
     VkFrame& input_frame,
-    VkFrameCtx& vk_frame_ctx,
+    VkImageCreateInfo& image_create_info,
     uint32_t width,
     uint32_t height
 ) {
     r = render;
-    auto input_frame_ctx = (AVHWFramesContext*)vk_frame_ctx.ctx->data;
+    vk_frame_ctx = std::make_unique<alvr::VkFrameCtx>(vk_ctx, image_create_info);
+
+    auto input_frame_ctx = (AVHWFramesContext*)vk_frame_ctx->ctx->data;
     assert(input_frame_ctx->sw_format == AV_PIX_FMT_BGRA);
 
     int err;
-    vk_frame = input_frame.make_av_frame(vk_frame_ctx);
+    vk_frame = input_frame.make_av_frame(*vk_frame_ctx);
 
     err = av_hwdevice_ctx_create_derived(&hw_ctx, AV_HWDEVICE_TYPE_CUDA, vk_ctx.ctx, 0);
     if (err < 0) {
@@ -119,17 +122,19 @@ alvr::EncodePipelineNvEnc::EncodePipelineNvEnc(
         break;
     }
 
-    switch (settings.m_h264Profile) {
-    case ALVR_H264_PROFILE_BASELINE:
-        av_opt_set(encoder_ctx->priv_data, "profile", "baseline", 0);
-        break;
-    case ALVR_H264_PROFILE_MAIN:
-        av_opt_set(encoder_ctx->priv_data, "profile", "main", 0);
-        break;
-    default:
-    case ALVR_H264_PROFILE_HIGH:
-        av_opt_set(encoder_ctx->priv_data, "profile", "high", 0);
-        break;
+    if (codec_id == ALVR_CODEC_H264) {
+        switch (settings.m_h264Profile) {
+        case ALVR_H264_PROFILE_BASELINE:
+            av_opt_set(encoder_ctx->priv_data, "profile", "baseline", 0);
+            break;
+        case ALVR_H264_PROFILE_MAIN:
+            av_opt_set(encoder_ctx->priv_data, "profile", "main", 0);
+            break;
+        default:
+        case ALVR_H264_PROFILE_HIGH:
+            av_opt_set(encoder_ctx->priv_data, "profile", "high", 0);
+            break;
+        }
     }
 
     char preset[] = "p0";
@@ -163,8 +168,7 @@ alvr::EncodePipelineNvEnc::EncodePipelineNvEnc(
     encoder_ctx->sample_aspect_ratio = AVRational { 1, 1 };
     encoder_ctx->max_b_frames = 0;
     encoder_ctx->gop_size = INT16_MAX;
-    encoder_ctx->color_range
-        = Settings::Instance().m_useFullRangeEncoding ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+    encoder_ctx->color_range = AVCOL_RANGE_JPEG;
     auto params = FfiDynamicEncoderParams {};
     params.updated = true;
     params.bitrate_bps = 30'000'000;

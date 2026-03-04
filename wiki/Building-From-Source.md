@@ -6,7 +6,10 @@ Preferred IDE (optional): Visual Studio Code with rust-analyzer extension
 
 You need to install [rustup](https://www.rust-lang.org/tools/install).
 
-On Windows you need also [Chocolatey](https://chocolatey.org/install).
+On Windows you also need [Chocolatey](https://chocolatey.org/install).
+
+To clone the repository use `git clone --recurse-submodules https://github.com/alvr-org/ALVR.git`.
+If you previously cloned the repo without submodules, simply run `git submodule update --init --checkout --recursive` in it.
 
 # Streamer Building
 
@@ -16,6 +19,8 @@ If you are on Linux, install these additional packages:
 
 * **Arch**
   
+  Note: At time of writing Arch gcc is too new to be compatible with nvcc. This means there is no neat way to compile an nvidia compatible build. Recommended workarounds are to build in some kind of containerised environment. This has been done successfully with both nixos and flatpak - but are not documented yet.
+
   ```bash
   sudo pacman -S clang curl nasm pkgconf yasm vulkan-headers libva-mesa-driver unzip ffmpeg libpipewire
   ```

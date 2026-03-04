@@ -1,6 +1,7 @@
 use alvr_common::{
-    anyhow::{bail, Result},
-    warn, ToAny,
+    ToAny,
+    anyhow::{Result, bail},
+    warn,
 };
 use flume::TryRecvError;
 use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent};
@@ -18,7 +19,7 @@ impl WelcomeSocket {
     }
 
     // Returns: client IP, client hostname
-    pub fn recv_all(&mut self) -> Result<HashMap<String, IpAddr>> {
+    pub fn recv_all(&self) -> Result<HashMap<String, IpAddr>> {
         let mut clients = HashMap::new();
 
         loop {

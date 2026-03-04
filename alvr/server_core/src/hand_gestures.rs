@@ -1,19 +1,16 @@
+use crate::input_mapping::ButtonMappingManager;
+use alvr_common::{
+    glam::{Vec2, Vec3},
+    *,
+};
+use alvr_packets::{ButtonEntry, ButtonValue};
+use alvr_session::HandTrackingInteractionConfig;
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
+    sync::LazyLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-use alvr_common::{
-    glam::{Vec2, Vec3},
-    once_cell::sync::Lazy,
-    *,
-};
-
-use alvr_packets::{ButtonEntry, ButtonValue};
-use alvr_session::HandGestureConfig;
-
-use crate::input_mapping::ButtonMappingManager;
 
 fn lerp_pose(a: Pose, b: Pose, fac: f32) -> Pose {
     Pose {
@@ -22,8 +19,8 @@ fn lerp_pose(a: Pose, b: Pose, fac: f32) -> Pose {
     }
 }
 
-pub static HAND_GESTURE_BUTTON_SET: Lazy<HashSet<u64>> = Lazy::new(|| {
-    [
+pub static HAND_GESTURE_BUTTON_SET: LazyLock<HashSet<u64>> = LazyLock::new(|| {
+    HashSet::from([
         *LEFT_X_CLICK_ID,
         *LEFT_X_TOUCH_ID,
         *LEFT_Y_CLICK_ID,
@@ -47,9 +44,7 @@ pub static HAND_GESTURE_BUTTON_SET: Lazy<HashSet<u64>> = Lazy::new(|| {
         *RIGHT_THUMBSTICK_Y_ID,
         *RIGHT_THUMBSTICK_CLICK_ID,
         *RIGHT_THUMBSTICK_TOUCH_ID,
-    ]
-    .into_iter()
-    .collect()
+    ])
 });
 
 #[derive(Debug, Clone)]
@@ -106,8 +101,8 @@ impl HandGestureManager {
 
     pub fn get_active_gestures(
         &mut self,
-        hand_skeleton: [Pose; 26],
-        config: &HandGestureConfig,
+        hand_skeleton: &[Pose; 26],
+        config: &HandTrackingInteractionConfig,
         device_id: u64,
     ) -> Vec<HandGesture> {
         // global joints
@@ -532,8 +527,7 @@ fn get_touch_bind_for_gesture(device_id: u64, gesture_id: HandGestureId) -> Opti
             HandGestureId::ThumbIndexPinch => Some(*LEFT_TRIGGER_TOUCH_ID),
             HandGestureId::ThumbMiddlePinch => Some(*LEFT_Y_TOUCH_ID),
             HandGestureId::ThumbRingPinch => Some(*LEFT_X_TOUCH_ID),
-            HandGestureId::JoystickX => Some(*LEFT_THUMBSTICK_TOUCH_ID),
-            HandGestureId::JoystickY => Some(*LEFT_THUMBSTICK_TOUCH_ID),
+            HandGestureId::JoystickX | HandGestureId::JoystickY => Some(*LEFT_THUMBSTICK_TOUCH_ID),
             _ => None,
         }
     } else {
@@ -541,8 +535,7 @@ fn get_touch_bind_for_gesture(device_id: u64, gesture_id: HandGestureId) -> Opti
             HandGestureId::ThumbIndexPinch => Some(*RIGHT_TRIGGER_TOUCH_ID),
             HandGestureId::ThumbMiddlePinch => Some(*RIGHT_B_TOUCH_ID),
             HandGestureId::ThumbRingPinch => Some(*RIGHT_A_TOUCH_ID),
-            HandGestureId::JoystickX => Some(*RIGHT_THUMBSTICK_TOUCH_ID),
-            HandGestureId::JoystickY => Some(*RIGHT_THUMBSTICK_TOUCH_ID),
+            HandGestureId::JoystickX | HandGestureId::JoystickY => Some(*RIGHT_THUMBSTICK_TOUCH_ID),
             _ => None,
         }
     }
@@ -578,13 +571,11 @@ pub fn trigger_hand_gesture_actions(
 
     for gesture in gestures {
         // Click bind
-        if !only_touch {
-            if let Some(click_bind) = get_click_bind_for_gesture(device_id, gesture.id) {
-                button_entries.append(&mut button_mapping_manager.map_button(&ButtonEntry {
-                    path_id: click_bind,
-                    value: ButtonValue::Binary(gesture.active && gesture.clicked),
-                }));
-            }
+        if !only_touch && let Some(click_bind) = get_click_bind_for_gesture(device_id, gesture.id) {
+            button_entries.append(&mut button_mapping_manager.map_button(&ButtonEntry {
+                path_id: click_bind,
+                value: ButtonValue::Binary(gesture.active && gesture.clicked),
+            }));
         }
 
         // Touch bind
@@ -596,13 +587,11 @@ pub fn trigger_hand_gesture_actions(
         }
 
         // Hover bind
-        if !only_touch {
-            if let Some(hover_bind) = get_hover_bind_for_gesture(device_id, gesture.id) {
-                button_entries.append(&mut button_mapping_manager.map_button(&ButtonEntry {
-                    path_id: hover_bind,
-                    value: ButtonValue::Scalar(if gesture.active { gesture.value } else { 0.0 }),
-                }));
-            }
+        if !only_touch && let Some(hover_bind) = get_hover_bind_for_gesture(device_id, gesture.id) {
+            button_entries.append(&mut button_mapping_manager.map_button(&ButtonEntry {
+                path_id: hover_bind,
+                value: ButtonValue::Scalar(if gesture.active { gesture.value } else { 0.0 }),
+            }));
         }
     }
 

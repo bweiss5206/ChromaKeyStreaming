@@ -1,8 +1,8 @@
 use crate::{
     InstallationInfo, Progress, ReleaseChannelsInfo, ReleaseInfo, UiMessage, WorkerMessage,
 };
-use alvr_common::{anyhow::Result, ToAny};
-use anyhow::bail;
+use alvr_common::{ToAny, anyhow::Result, semver::Version};
+use anyhow::{Context, bail};
 use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use std::{
@@ -13,21 +13,6 @@ use std::{
     process::Command,
     sync::mpsc::{Receiver, Sender},
 };
-
-#[cfg(not(windows))]
-const ADB_EXECUTABLE: &str = "adb";
-#[cfg(windows)]
-const ADB_EXECUTABLE: &str = "adb.exe";
-
-#[cfg(target_os = "linux")]
-const PLATFORM_TOOLS_DL_LINK: &str =
-    "https://dl.google.com/android/repository/platform-tools-latest-linux.zip";
-#[cfg(target_os = "macos")]
-const PLATFORM_TOOLS_DL_LINK: &str =
-    "https://dl.google.com/android/repository/platform-tools-latest-macos.zip";
-#[cfg(windows)]
-const PLATFORM_TOOLS_DL_LINK: &str =
-    "https://dl.google.com/android/repository/platform-tools-latest-windows.zip";
 
 const APK_NAME: &str = "client.apk";
 
@@ -42,14 +27,14 @@ pub fn worker(
     tokio::runtime::Runtime::new()
         .expect("Failed to create tokio runtime")
         .block_on(async {
-            let client = reqwest::Client::builder()
+            let req_client = reqwest::Client::builder()
                 .user_agent("ALVR-Launcher")
                 .build()
                 .unwrap();
-            let version_data = match fetch_all_releases(&client).await {
+            let version_data = match fetch_all_releases(&req_client).await {
                 Ok(data) => data,
                 Err(e) => {
-                    eprintln!("Error fetching version data: {}", e);
+                    eprintln!("Error fetching version data: {e}");
                     return;
                 }
             };
@@ -64,11 +49,20 @@ pub fn worker(
                 };
                 let res = match message {
                     UiMessage::Quit => return,
-                    UiMessage::InstallServer(release) => {
-                        install_server(&worker_message_sender, release, &client).await
+                    UiMessage::InstallServer {
+                        release_info,
+                        session_version,
+                    } => {
+                        install_server(
+                            &worker_message_sender,
+                            release_info,
+                            session_version,
+                            &req_client,
+                        )
+                        .await
                     }
                     UiMessage::InstallClient(release_info) => {
-                        install_apk(&worker_message_sender, release_info, &client).await
+                        install_and_launch_apk(&worker_message_sender, release_info)
                     }
                 };
                 match res {
@@ -137,85 +131,82 @@ pub fn get_release(
         })
 }
 
-async fn install_apk(
+fn install_and_launch_apk(
     worker_message_sender: &Sender<WorkerMessage>,
     release: ReleaseInfo,
-    client: &reqwest::Client,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     worker_message_sender.send(WorkerMessage::ProgressUpdate(Progress {
         message: "Starting install".into(),
         progress: 0.0,
     }))?;
 
-    let installation_dir = installations_dir().join(&release.version);
-
-    let apk_path = installation_dir.clone().join(APK_NAME);
-
+    let root = installations_dir().join(&release.version);
+    let apk_name = "alvr_client_android.apk";
+    let apk_path = root.join(apk_name);
     if !apk_path.exists() {
-        let apk_buffer = download(
-            worker_message_sender,
-            "Downloading Client APK",
-            release
-                .assets
-                .get("alvr_client_android.apk")
-                .ok_or(anyhow::anyhow!("Unable to determine download URL"))?,
-            client,
-        )
-        .await?;
-
+        let apk_url = release
+            .assets
+            .get(apk_name)
+            .ok_or(anyhow::anyhow!("Unable to determine download URL"))?;
+        let apk_buffer = alvr_adb::commands::download(apk_url, |downloaded, total| {
+            let progress = total.map_or(0.0, |t| downloaded as f32 / t as f32);
+            worker_message_sender
+                .send(WorkerMessage::ProgressUpdate(Progress {
+                    message: "Downloading Client APK".into(),
+                    progress,
+                }))
+                .ok();
+        })?;
         let mut file = File::create(&apk_path)?;
         file.write_all(&apk_buffer)?;
     }
 
+    let layout = alvr_filesystem::Layout::new(&root);
+    let adb_path = alvr_adb::commands::require_adb(&layout, |downloaded, total| {
+        let progress = total.map_or(0.0, |t| downloaded as f32 / t as f32);
+        worker_message_sender
+            .send(WorkerMessage::ProgressUpdate(Progress {
+                message: "Downloading ADB".into(),
+                progress,
+            }))
+            .ok();
+    })?;
+
+    let device_serial = alvr_adb::commands::list_devices(&adb_path)?
+        .iter()
+        .find_map(|d| d.serial.clone())
+        .ok_or(anyhow::anyhow!("Failed to find connected device"))?;
+
+    let v = if release.version.starts_with('v') {
+        release.version[1..].to_string()
+    } else {
+        release.version
+    };
+    let version = Version::parse(&v).context("Failed to parse release version")?;
+    let stable = version.pre.is_empty() && !version.build.contains("nightly");
+    let application_id = if stable {
+        alvr_system_info::PACKAGE_NAME_GITHUB_STABLE
+    } else {
+        alvr_system_info::PACKAGE_NAME_GITHUB_DEV
+    };
+
+    if alvr_adb::commands::is_package_installed(&adb_path, &device_serial, application_id)? {
+        worker_message_sender.send(WorkerMessage::ProgressUpdate(Progress {
+            message: "Uninstalling old APK".into(),
+            progress: 0.0,
+        }))?;
+        alvr_adb::commands::uninstall_package(&adb_path, &device_serial, application_id)?;
+    }
+
     worker_message_sender.send(WorkerMessage::ProgressUpdate(Progress {
-        message: "Installing APK".into(),
+        message: "Installing new APK".into(),
         progress: 0.0,
     }))?;
+    alvr_adb::commands::install_package(&adb_path, &device_serial, &apk_path.to_string_lossy())?;
 
-    let res = match Command::new(ADB_EXECUTABLE)
-        .arg("install")
-        .arg("-d")
-        .arg(&apk_path)
-        .output()
-    {
-        Ok(res) => res,
-        Err(_) => {
-            let adb_path = data_dir().join("platform-tools").join(ADB_EXECUTABLE);
+    alvr_adb::commands::start_application(&adb_path, &device_serial, application_id)?;
 
-            if !adb_path.exists() {
-                let mut buffer = Cursor::new(
-                    download(
-                        worker_message_sender,
-                        "Downloading Android Platform Tools",
-                        PLATFORM_TOOLS_DL_LINK,
-                        client,
-                    )
-                    .await?,
-                );
-
-                zip::ZipArchive::new(&mut buffer)?.extract(&data_dir())?;
-            }
-
-            worker_message_sender.send(WorkerMessage::ProgressUpdate(Progress {
-                message: "Installing APK".into(),
-                progress: 0.0,
-            }))?;
-
-            Command::new(adb_path)
-                .arg("install")
-                .arg("-r")
-                .arg(&apk_path)
-                .output()?
-        }
-    };
-    if res.status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "ADB install failed: {}",
-            String::from_utf8_lossy(&res.stderr)
-        ))
-    }
+    Ok(())
 }
 
 async fn download(
@@ -223,7 +214,7 @@ async fn download(
     message: &str,
     url: &str,
     client: &reqwest::Client,
-) -> anyhow::Result<Vec<u8>> {
+) -> Result<Vec<u8>> {
     let res = client.get(url).send().await?;
     let total_size = res.content_length();
     let mut stream = res.bytes_stream();
@@ -239,7 +230,7 @@ async fn download(
                 }))?
             }
             None => worker_message_sender.send(WorkerMessage::ProgressUpdate(Progress {
-                message: format!("{} (Progress unavailable)", message),
+                message: format!("{message} (Progress unavailable)"),
                 progress: 0.5,
             }))?,
         }
@@ -250,9 +241,10 @@ async fn download(
 
 async fn install_server(
     worker_message_sender: &Sender<WorkerMessage>,
-    release: ReleaseInfo,
-    client: &reqwest::Client,
-) -> anyhow::Result<()> {
+    release_info: ReleaseInfo,
+    session_version: Option<String>,
+    req_client: &reqwest::Client,
+) -> Result<()> {
     worker_message_sender.send(WorkerMessage::ProgressUpdate(Progress {
         message: "Starting install".into(),
         progress: 0.0,
@@ -264,14 +256,20 @@ async fn install_server(
         "alvr_streamer_linux.tar.gz"
     };
 
-    let url = release
+    let url = release_info
         .assets
         .get(file_name)
         .ok_or(anyhow::anyhow!("Unable to determine download link"))?;
 
-    let buffer = download(worker_message_sender, "Downloading Streamer", url, client).await?;
+    let buffer = download(
+        worker_message_sender,
+        "Downloading Streamer",
+        url,
+        req_client,
+    )
+    .await?;
 
-    let installation_dir = installations_dir().join(&release.version);
+    let installation_dir = installations_dir().join(&release_info.version);
 
     fs::create_dir_all(&installation_dir)?;
 
@@ -282,6 +280,32 @@ async fn install_server(
         tar::Archive::new(&mut GzDecoder::new(&mut buffer)).unpack(&installation_dir)?;
     }
 
+    if let Some(session_version) = session_version {
+        if !cfg!(windows) {
+            unreachable!("The session copying code should only be hit on Windows!")
+        }
+
+        for inst in get_installations() {
+            if inst.version == session_version {
+                let source = alvr_filesystem::filesystem_layout_from_openvr_driver_root_dir(
+                    &installations_dir().join(session_version),
+                )
+                .unwrap()
+                .session();
+
+                let destination = alvr_filesystem::filesystem_layout_from_openvr_driver_root_dir(
+                    &installation_dir,
+                )
+                .unwrap()
+                .session();
+
+                fs::copy(source, destination)?;
+
+                break;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -290,9 +314,11 @@ pub fn data_dir() -> PathBuf {
         PathBuf::from(env::var("HOME").expect("Failed to determine home directory"))
             .join(".local/share/ALVR-Launcher")
     } else {
-        env::current_dir()
+        env::current_exe()
             .expect("Unable to determine executable directory")
-            .join("ALVR-Launcher")
+            .parent()
+            .unwrap()
+            .to_owned()
     }
 }
 
@@ -306,22 +332,32 @@ pub fn get_installations() -> Vec<InstallationInfo> {
                     .filter(|entry| match entry.file_type() {
                         Ok(file_type) => file_type.is_dir(),
                         Err(e) => {
-                            eprintln!("Failed to read entry file type: {}", e);
+                            eprintln!("Failed to read entry file type: {e}");
                             false
                         }
                     })
                     .map(|entry| {
-                        let mut apk_path = entry.path();
-                        apk_path.push(APK_NAME);
+                        let has_session_json = if cfg!(windows) {
+                            alvr_filesystem::filesystem_layout_from_openvr_driver_root_dir(
+                                &entry.path(),
+                            )
+                            .map(|layout| layout.session().exists())
+                            .unwrap_or(false)
+                        } else {
+                            // On linux, the launcher does not need to manage the session files
+                            false
+                        };
+
                         InstallationInfo {
                             version: entry.file_name().to_string_lossy().into(),
-                            is_apk_downloaded: apk_path.exists(),
+                            is_apk_downloaded: entry.path().join(APK_NAME).exists(),
+                            has_session_json,
                         }
                     })
             })
             .collect(),
         Err(e) => {
-            eprintln!("Failed to read versions dir: {}", e);
+            eprintln!("Failed to read versions dir: {e}");
             Vec::new()
         }
     }

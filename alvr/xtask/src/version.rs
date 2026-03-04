@@ -1,7 +1,7 @@
 use crate::command;
 use alvr_filesystem as afs;
 use std::fs;
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 pub fn split_string(source: &str, start_pattern: &str, end: char) -> (String, String, String) {
     let start_idx = source.find(start_pattern).unwrap() + start_pattern.len();
@@ -57,32 +57,18 @@ pub fn check_msrv() {
 
     cmd!(
         sh,
-        "cargo install cargo-msrv --git https://github.com/foresterre/cargo-msrv"
+        "cargo install cargo-msrv --git https://github.com/foresterre/cargo-msrv --rev 14097beaa5fa770aabd66170572cb04f1dac87c2"
     )
     .run()
     .unwrap();
-    cmd!(
-        sh,
-        "cargo msrv verify --output-format json --path alvr/server_openvr"
-    )
-    .run()
-    .unwrap();
-    cmd!(
-        sh,
-        "cargo msrv verify --output-format json --path alvr/dashboard"
-    )
-    .run()
-    .unwrap();
-    cmd!(
-        sh,
-        "cargo msrv verify --output-format json --path alvr/launcher"
-    )
-    .run()
-    .unwrap();
-    cmd!(
-        sh,
-        "cargo msrv verify --output-format json --path alvr/client_openxr"
-    )
-    .run()
-    .unwrap();
+
+    let paths = [
+        "alvr/server_openvr",
+        "alvr/dashboard",
+        "alvr/launcher",
+        "alvr/client_openxr",
+    ];
+    for path in paths {
+        cmd!(sh, "cargo msrv verify --path {path}").run().unwrap()
+    }
 }

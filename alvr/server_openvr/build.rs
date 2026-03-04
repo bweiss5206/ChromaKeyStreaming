@@ -61,15 +61,14 @@ fn main() {
     let mut build = cc::Build::new();
     build
         .cpp(true)
+        .std("c++17")
         .files(source_files_paths)
-        .flag_if_supported("-std=c++17")
         .include(alvr_filesystem::workspace_dir().join("openvr/headers"))
         .include("cpp");
 
     if platform_name == "windows" {
         build
             .debug(false) // This is because we cannot link to msvcrtd (see below)
-            .flag("/std:c++17")
             .flag("/permissive-")
             .define("NOMINMAX", None)
             .define("_WINSOCKAPI_", None)
@@ -79,8 +78,8 @@ fn main() {
         build.define("__APPLE__", None);
     }
 
-    // #[cfg(debug_assertions)]
-    // build.define("ALVR_DEBUG_LOG", None);
+    #[cfg(debug_assertions)]
+    build.define("ALVR_DEBUG_LOG", None);
 
     let gpl_or_linux = cfg!(feature = "gpl") || cfg!(target_os = "linux");
 
@@ -102,6 +101,22 @@ fn main() {
     #[cfg(feature = "gpl")]
     build.define("ALVR_GPL", None);
 
+    #[cfg(target_os = "windows")]
+    {
+        let vpl_path = alvr_filesystem::deps_dir().join("windows/libvpl/alvr_build");
+        let vpl_include_path = vpl_path.join("include");
+        let vpl_lib_path = vpl_path.join("lib");
+
+        println!(
+            "cargo:rustc-link-search=native={}",
+            vpl_lib_path.to_string_lossy()
+        );
+
+        build.define("ONEVPL_EXPERIMENTAL", None);
+        build.include(vpl_include_path);
+        println!("cargo:rustc-link-lib=vpl");
+    }
+
     build.compile("bindings");
 
     #[cfg(all(target_os = "linux", feature = "gpl"))]
@@ -118,12 +133,14 @@ fn main() {
         assert!(x264_pkg_path.exists());
 
         let x264_pkg_path = x264_pkg_path.to_string_lossy().to_string();
-        env::set_var(
-            "PKG_CONFIG_PATH",
-            env::var("PKG_CONFIG_PATH").map_or(x264_pkg_path.clone(), |old| {
-                format!("{x264_pkg_path}:{old}")
-            }),
-        );
+        unsafe {
+            env::set_var(
+                "PKG_CONFIG_PATH",
+                env::var("PKG_CONFIG_PATH").map_or(x264_pkg_path.clone(), |old| {
+                    format!("{x264_pkg_path}:{old}")
+                }),
+            )
+        };
         println!("cargo:rustc-link-lib=static=x264");
 
         pkg_config::Config::new()
@@ -150,12 +167,14 @@ fn main() {
             assert!(ffmpeg_pkg_path.exists());
 
             let ffmpeg_pkg_path = ffmpeg_pkg_path.to_string_lossy().to_string();
-            env::set_var(
-                "PKG_CONFIG_PATH",
-                env::var("PKG_CONFIG_PATH").map_or(ffmpeg_pkg_path.clone(), |old| {
-                    format!("{ffmpeg_pkg_path}:{old}")
-                }),
-            );
+            unsafe {
+                env::set_var(
+                    "PKG_CONFIG_PATH",
+                    env::var("PKG_CONFIG_PATH").map_or(ffmpeg_pkg_path.clone(), |old| {
+                        format!("{ffmpeg_pkg_path}:{old}")
+                    }),
+                )
+            };
 
             let pkg = pkg_config::Config::new().statik(true).to_owned();
 

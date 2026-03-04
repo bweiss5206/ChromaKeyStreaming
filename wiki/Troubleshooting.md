@@ -1,3 +1,5 @@
+## If you're looking for Linux troubleshooting, please check [here](https://github.com/alvr-org/ALVR/wiki/Linux-Troubleshooting) first, and only then this page.
+
 For ALVR 20.0.0 and later
 ===
 
@@ -47,7 +49,7 @@ The version of ALVR available on the SideQuest store is compatible with the late
 Failed to initialize CEncoder
 ---
 
-ALVR currently needs a recent AMD or Nvidia GPU to run, since it utilizes hardware video encoding (see [requirements](https://github.com/alvr-org/ALVR#requirements)). If you get an error saying something like
+ALVR currently needs a recent AMD, Nvidia or Intel GPU to run, since it utilizes hardware video encoding (see [requirements](https://github.com/alvr-org/ALVR#requirements)). If you get an error saying something like
 
 ```
 Failed to initialize CEncoder. All VideoEncoder are not available. VCE: AMF Error 1. g_AMFFactory.Init(), NVENC: NvEnc NvEncoderD3D11 failed. Code=1 NvEncoder::LoadNvEncApi : NVENC library file is not found. Please ensure NV driver is installed at c:\src\alvr\alvr_server\nvencoder.cpp:70
@@ -55,7 +57,7 @@ Failed to initialize CEncoder. All VideoEncoder are not available. VCE: AMF Erro
 
 and you have up-to-date GPU drivers, then your graphics card isn't supported. If you're using a laptop with a powerful enough discrete GPU, you _might_ be able to get ALVR to work by forcing SteamVR to use it in either Windows settings, or the Nvidia control panel.
 
-If you have a compatible GPU, you're most likely seeing a different error after either `VCE:` or `NVENC:` than above. In that case, try using a different video codec in ALVR settings. You can also try lowering your video resolution setting.
+If you have a compatible GPU, you're most likely seeing a different error after either `VCE:`, `VPL:` or `NVENC:` than above. In that case, try using a different video codec in ALVR settings. You can also try lowering your video resolution setting.
 
 Failed to start audio capture
 ---
@@ -177,3 +179,20 @@ Solution:
 Symptoms: image is not always smooth especially in high motion or fast scenes.
 
 Solution: increase maxBufferingFrames.
+
+
+### Possible temporary fix for Meta framerate scaling for throttling feature
+
+#### Problem  
+The current version of ALVR does not support Meta's framerate scaling for throttling feature. This can cause issues where the framerate between the headset and the streamer application does not align, potentially leading to stuttering or throttling. A future update to ALVR is expected to address this issue, but a workaround is available in the meantime.
+
+#### Temporary Fix  
+1. **Reboot Your Headset**  
+   - Start by rebooting your VR headset. This may resolve the issue without further adjustments.
+
+2. **Manually Set the Framerate**  
+   - Use the **SideQuest Desktop application** to manually adjust the framerate of the ALVR Android client on your headset to match the framerate set in the ALVR streamer application.  
+     - Example: If the ALVR streamer is configured to 90Hz, set the headset's refresh rate to 90Hz in SideQuest.
+     - for more information see issue [#2537] (https://github.com/alvr-org/ALVR/issues/2537).
+
+This adjustment bypasses the framerate scaling for throttling feature, ensuring smoother performance.

@@ -207,7 +207,6 @@ void CEncoder::Run() {
         FrameRender render(vk_ctx, init, m_fds);
         auto output = render.CreateOutput();
 
-        alvr::VkFrameCtx vk_frame_ctx(vk_ctx, output.imageInfo);
         alvr::VkFrame frame(
             vk_ctx, output.image, output.imageInfo, output.size, output.memory, output.drm
         );
@@ -215,7 +214,7 @@ void CEncoder::Run() {
             &render,
             vk_ctx,
             frame,
-            vk_frame_ctx,
+            output.imageInfo,
             render.GetEncodingWidth(),
             render.GetEncodingHeight()
         );
@@ -312,8 +311,6 @@ void CEncoder::Stop() {
 }
 
 void CEncoder::OnStreamStart() { m_scheduler.OnStreamStart(); }
-
-void CEncoder::OnPacketLoss() { m_scheduler.OnPacketLoss(); }
 
 void CEncoder::InsertIDR() { m_scheduler.InsertIDR(); }
 

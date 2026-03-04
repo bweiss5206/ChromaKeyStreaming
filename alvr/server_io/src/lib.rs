@@ -7,16 +7,17 @@ pub use openvr_drivers::*;
 pub use openvrpaths::*;
 
 use alvr_common::{
-    anyhow::{bail, Result},
-    error, info, ConnectionState,
+    ConnectionState,
+    anyhow::{Result, bail},
+    error, info,
 };
 use alvr_events::EventType;
-use alvr_packets::{AudioDevicesList, ClientListAction, PathSegment, PathValuePair};
+use alvr_packets::{ClientConnectionsAction, PathSegment, PathValuePair};
 use alvr_session::{ClientConnectionConfig, SessionConfig, Settings};
-use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json as json;
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
+    fmt::{self, Debug},
     fs,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
@@ -31,7 +32,7 @@ fn save_session(session: &SessionConfig, path: &Path) -> Result<()> {
 // SessionConfig wrapper that saves session.json on destruction.
 pub struct SessionLock<'a> {
     session_desc: &'a mut SessionConfig,
-    session_path: &'a Path,
+    session_path: Option<&'a Path>,
     settings: &'a mut Settings,
 }
 
@@ -50,7 +51,10 @@ impl DerefMut for SessionLock<'_> {
 
 impl Drop for SessionLock<'_> {
     fn drop(&mut self) {
-        save_session(self.session_desc, self.session_path).unwrap();
+        if let Some(session_path) = self.session_path {
+            save_session(self.session_desc, session_path).ok();
+        }
+
         *self.settings = self.session_desc.to_settings();
         alvr_events::send_event(EventType::Session(Box::new(self.session_desc.clone())));
     }
@@ -61,22 +65,26 @@ impl Drop for SessionLock<'_> {
 // read, within the same lock.
 // fixme: the dashboard is doing this wrong because it is holding its own session state. If read and
 // write need to happen on separate threads, a critical region should be implemented.
-pub struct ServerDataManager {
-    session: SessionConfig,
+pub struct ServerSessionManager {
+    session_config: SessionConfig,
     settings: Settings,
-    session_path: PathBuf,
+    session_path: Option<PathBuf>,
 }
 
-impl ServerDataManager {
-    pub fn new(session_path: &Path) -> Self {
-        let config_dir = session_path.parent().unwrap();
-        fs::create_dir_all(config_dir).ok();
-        let session_desc = Self::load_session(session_path, config_dir);
+impl ServerSessionManager {
+    pub fn new(session_path: Option<PathBuf>) -> Self {
+        let session_config = if let Some(session_path) = &session_path {
+            let config_dir = session_path.parent().unwrap();
+            fs::create_dir_all(config_dir).ok();
+            Self::load_session(session_path, config_dir)
+        } else {
+            SessionConfig::default()
+        };
 
         Self {
-            session: session_desc.clone(),
-            settings: session_desc.to_settings(),
-            session_path: session_path.to_owned(),
+            session_config: session_config.clone(),
+            settings: session_config.to_settings(),
+            session_path,
         }
     }
 
@@ -129,13 +137,13 @@ impl ServerDataManager {
 
     // prefer settings()
     pub fn session(&self) -> &SessionConfig {
-        &self.session
+        &self.session_config
     }
 
-    pub fn session_mut(&mut self) -> SessionLock {
+    pub fn session_mut(&mut self) -> SessionLock<'_> {
         SessionLock {
-            session_desc: &mut self.session,
-            session_path: &self.session_path,
+            session_desc: &mut self.session_config,
+            session_path: self.session_path.as_deref(),
             settings: &mut self.settings,
         }
     }
@@ -145,8 +153,8 @@ impl ServerDataManager {
     }
 
     // Note: "value" can be any session subtree, in json format.
-    pub fn set_values(&mut self, descs: Vec<PathValuePair>) -> Result<()> {
-        let mut session_json = serde_json::to_value(self.session.clone()).unwrap();
+    pub fn set_session_values(&mut self, descs: Vec<PathValuePair>) -> Result<()> {
+        let mut session_json = serde_json::to_value(self.session_config.clone()).unwrap();
 
         for desc in descs {
             let mut session_ref = &mut session_json;
@@ -172,27 +180,30 @@ impl ServerDataManager {
         }
 
         // session_json has been updated
-        self.session = serde_json::from_value(session_json)?;
-        self.settings = self.session.to_settings();
+        self.session_config = serde_json::from_value(session_json)?;
+        self.settings = self.session_config.to_settings();
 
-        save_session(&self.session, &self.session_path).unwrap();
-        alvr_events::send_event(EventType::Session(Box::new(self.session.clone())));
+        if let Some(session_path) = &self.session_path {
+            save_session(&self.session_config, session_path)?;
+        }
+
+        alvr_events::send_event(EventType::Session(Box::new(self.session_config.clone())));
 
         Ok(())
     }
 
     pub fn client_list(&self) -> &HashMap<String, ClientConnectionConfig> {
-        &self.session.client_connections
+        &self.session_config.client_connections
     }
 
-    pub fn update_client_list(&mut self, hostname: String, action: ClientListAction) {
-        let mut client_connections = self.session.client_connections.clone();
+    pub fn update_client_connections(&mut self, hostname: String, action: ClientConnectionsAction) {
+        let mut client_connections = self.session_config.client_connections.clone();
 
         let maybe_client_entry = client_connections.entry(hostname);
 
         let mut updated = false;
         match action {
-            ClientListAction::AddIfMissing {
+            ClientConnectionsAction::AddIfMissing {
                 trusted,
                 manual_ips,
             } => {
@@ -203,71 +214,76 @@ impl ServerDataManager {
                         manual_ips: manual_ips.into_iter().collect(),
                         trusted,
                         connection_state: ConnectionState::Disconnected,
-                        cabled: false,
                     };
                     new_entry.insert(client_connection_desc);
 
                     updated = true;
                 }
             }
-            ClientListAction::SetDisplayName(name) => {
+            ClientConnectionsAction::SetDisplayName(name) => {
                 if let Entry::Occupied(mut entry) = maybe_client_entry {
                     entry.get_mut().display_name = name;
 
                     updated = true;
                 }
             }
-            ClientListAction::Trust => {
+            ClientConnectionsAction::Trust => {
                 if let Entry::Occupied(mut entry) = maybe_client_entry {
                     entry.get_mut().trusted = true;
 
                     updated = true;
                 }
             }
-            ClientListAction::SetManualIps(ips) => {
+            ClientConnectionsAction::SetManualIps(ips) => {
                 if let Entry::Occupied(mut entry) = maybe_client_entry {
                     entry.get_mut().manual_ips = ips.into_iter().collect();
 
                     updated = true;
                 }
             }
-            ClientListAction::RemoveEntry => {
+            ClientConnectionsAction::RemoveEntry => {
                 if let Entry::Occupied(entry) = maybe_client_entry {
                     entry.remove_entry();
 
                     updated = true;
                 }
             }
-            ClientListAction::UpdateCurrentIp(current_ip) => {
-                if let Entry::Occupied(mut entry) = maybe_client_entry {
-                    if entry.get().current_ip != current_ip {
-                        entry.get_mut().current_ip = current_ip;
+            ClientConnectionsAction::UpdateCurrentIp(current_ip) => {
+                if let Entry::Occupied(mut entry) = maybe_client_entry
+                    && entry.get().current_ip != current_ip
+                {
+                    entry.get_mut().current_ip = current_ip;
 
-                        updated = true;
-                    }
+                    updated = true;
                 }
             }
-            ClientListAction::SetConnectionState(state) => {
-                if let Entry::Occupied(mut entry) = maybe_client_entry {
-                    if entry.get().connection_state != state {
-                        entry.get_mut().connection_state = state;
+            ClientConnectionsAction::SetConnectionState(state) => {
+                if let Entry::Occupied(mut entry) = maybe_client_entry
+                    && entry.get().connection_state != state
+                {
+                    entry.get_mut().connection_state = state;
 
-                        updated = true;
-                    }
+                    updated = true;
                 }
             }
         }
 
         if updated {
-            self.session.client_connections = client_connections;
+            self.session_config.client_connections = client_connections;
 
-            save_session(&self.session, &self.session_path).unwrap();
-            alvr_events::send_event(EventType::Session(Box::new(self.session.clone())));
+            if let Some(session_path) = &self.session_path {
+                save_session(&self.session_config, session_path).ok();
+            }
+            alvr_events::send_event(EventType::Session(Box::new(self.session_config.clone())));
         }
     }
 
     pub fn client_hostnames(&self) -> Vec<String> {
-        self.session.client_connections.keys().cloned().collect()
+        self.session_config
+            .client_connections
+            .keys()
+            .cloned()
+            .collect()
     }
 
     // Run at the start of dashboard or server
@@ -275,34 +291,26 @@ impl ServerDataManager {
         let connections = self.client_list().clone();
         for (hostname, connection) in connections {
             if connection.trusted {
-                self.update_client_list(
+                self.update_client_connections(
                     hostname,
-                    ClientListAction::SetConnectionState(ConnectionState::Disconnected),
+                    ClientConnectionsAction::SetConnectionState(ConnectionState::Disconnected),
                 )
             } else {
-                self.update_client_list(hostname, ClientListAction::RemoveEntry);
+                self.update_client_connections(hostname, ClientConnectionsAction::RemoveEntry);
             }
         }
 
         for hostname in self.client_hostnames() {
-            self.update_client_list(hostname.clone(), ClientListAction::UpdateCurrentIp(None));
+            self.update_client_connections(
+                hostname.clone(),
+                ClientConnectionsAction::UpdateCurrentIp(None),
+            );
         }
-    }
-
-    pub fn get_audio_devices_list(&self) -> Result<AudioDevicesList> {
-        let host = cpal::default_host();
-
-        let output = host
-            .output_devices()?
-            .filter_map(|d| d.name().ok())
-            .collect::<Vec<_>>();
-        let input = host
-            .input_devices()?
-            .filter_map(|d| d.name().ok())
-            .collect::<Vec<_>>();
-
-        Ok(AudioDevicesList { output, input })
     }
 }
 
-pub fn prepare_client_list() {}
+impl Debug for ServerSessionManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.session_path)
+    }
+}

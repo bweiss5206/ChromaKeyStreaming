@@ -2,51 +2,16 @@
 
 #include "ALVR-common/packet_types.h"
 #include "TrackedDevice.h"
-#include "openvr_driver.h"
+#include "openvr_driver_wrap.h"
 #include <map>
 
-class Controller : public TrackedDevice, public vr::ITrackedDeviceServerDriver {
+class Controller : public TrackedDevice {
 public:
-    Controller(uint64_t deviceID);
-
+    Controller(uint64_t deviceID, vr::EVRSkeletalTrackingLevel skeletonLevel);
     virtual ~Controller() {};
-
-    //
-    // ITrackedDeviceServerDriver
-    //
-
-    virtual vr::EVRInitError Activate(vr::TrackedDeviceIndex_t unObjectId);
-
-    virtual void Deactivate();
-
-    virtual void EnterStandby();
-
-    void* GetComponent(const char* pchComponentNameAndVersion);
-
-    virtual void PowerOff() {};
-
-    /** debug request from a client */
-    virtual void
-    DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize);
-
-    virtual vr::DriverPose_t GetPose();
-
-    vr::VRInputComponentHandle_t getHapticComponent();
-
     void RegisterButton(uint64_t id);
-
     void SetButton(uint64_t id, FfiButtonValue value);
-
-    bool onPoseUpdate(
-        float predictionS,
-        FfiDeviceMotion motion,
-        const FfiHandSkeleton* hand,
-        unsigned int controllersTracked
-    );
-
-    void GetBoneTransform(bool withController, vr::VRBoneTransform_t outBoneTransform[]);
-
-    vr::ETrackedDeviceClass getControllerDeviceClass();
+    bool OnPoseUpdate(uint64_t targetTimestampNs, float predictionS, FfiHandData handData);
 
 private:
     static const int SKELETON_BONE_COUNT = 31;
@@ -56,8 +21,9 @@ private:
 
     vr::VRInputComponentHandle_t m_compHaptic;
     vr::VRInputComponentHandle_t m_compSkeleton = vr::k_ulInvalidInputComponentHandle;
+    vr::EVRSkeletalTrackingLevel m_skeletonLevel;
 
-    vr::DriverPose_t m_pose;
+    uint64_t m_poseTargetTimestampNs;
 
     // These variables are used for controller hand animation
     // todo: move to rust
@@ -69,4 +35,13 @@ private:
     bool m_lastTriggerTouch = false;
     float m_triggerValue = 0;
     float m_gripValue = 0;
+
+    vr::VRInputComponentHandle_t getHapticComponent();
+    void GetBoneTransform(bool withController, vr::VRBoneTransform_t outBoneTransform[]);
+
+    // TrackedDevice
+    bool activate() final;
+    void* get_component([[maybe_unused]] const char* component_name_and_version) final {
+        return nullptr;
+    }
 };

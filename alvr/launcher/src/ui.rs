@@ -1,10 +1,11 @@
-use crate::{actions, InstallationInfo, Progress, ReleaseChannelsInfo, UiMessage, WorkerMessage};
+use crate::{InstallationInfo, Progress, ReleaseChannelsInfo, UiMessage, WorkerMessage, actions};
+use alvr_gui_common::ModalButton;
 use eframe::{
     egui::{
         self, Button, CentralPanel, ComboBox, Context, Frame, Grid, Layout, ProgressBar, RichText,
-        ViewportCommand, Window,
+        Ui, ViewportCommand,
     },
-    emath::{Align, Align2},
+    emath::Align,
     epaint::Color32,
 };
 use std::{
@@ -19,12 +20,15 @@ enum State {
 }
 
 #[derive(Default)]
-enum Popup {
+enum PopupType {
     #[default]
     None,
     DeleteInstallation(String),
     EditVersion(String),
-    Version(VersionPopup),
+    AddVersion {
+        version_selection: Version,
+        session_version_selection: Option<String>,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -35,12 +39,8 @@ enum ReleaseChannelType {
 
 #[derive(Clone, PartialEq, Eq)]
 struct Version {
-    version: String,
+    string: String,
     release_channel: ReleaseChannelType,
-}
-
-struct VersionPopup {
-    version: Version,
 }
 
 pub struct Launcher {
@@ -49,7 +49,7 @@ pub struct Launcher {
     state: State,
     release_channels_info: Option<ReleaseChannelsInfo>,
     installations: Vec<InstallationInfo>,
-    popup: Popup,
+    popup: PopupType,
 }
 
 impl Launcher {
@@ -66,190 +66,215 @@ impl Launcher {
             state: State::Default,
             release_channels_info: None,
             installations: actions::get_installations(),
-            popup: Popup::None,
+            popup: PopupType::None,
         }
     }
 
-    fn version_popup(&mut self, ctx: &Context, mut version_popup: VersionPopup) -> Popup {
-        Window::new("Add version")
-            .anchor(Align2::CENTER_CENTER, (0.0, 0.0))
-            .resizable(false)
-            .collapsible(false)
-            .show(ctx, |ui| {
+    fn version_popup(
+        &self,
+        ctx: &Context,
+        mut version: Version,
+        mut session_version: Option<String>,
+    ) -> PopupType {
+        let response = alvr_gui_common::modal(
+            ctx,
+            "Add version",
+            {
                 // Safety: unwrap is safe because the "Add release" button is available after populating the release_channels_info.
                 let release_channels_info = self.release_channels_info.as_ref().unwrap();
-                let (channel, version_str, versions): (&str, String, Vec<Version>) =
-                    match version_popup.version.release_channel.clone() {
-                        ReleaseChannelType::Stable => (
-                            "Stable",
-                            version_popup.version.version.clone(),
-                            release_channels_info
-                                .stable
-                                .iter()
-                                .map(|release| Version {
-                                    version: release.version.clone(),
-                                    release_channel: ReleaseChannelType::Stable,
-                                })
-                                .collect(),
-                        ),
-                        ReleaseChannelType::Nightly => (
-                            "Nightly",
-                            version_popup.version.version.clone(),
-                            release_channels_info
-                                .nightly
-                                .iter()
-                                .map(|release| Version {
-                                    version: release.version.clone(),
-                                    release_channel: ReleaseChannelType::Nightly,
-                                })
-                                .collect(),
-                        ),
-                    };
-                Grid::new("add-version-grid").num_columns(2).show(ui, |ui| {
-                    ui.label("Channel");
-
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        ComboBox::from_id_source("channel")
-                            .selected_text(channel)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut version_popup.version,
-                                    Version {
-                                        version: self
-                                            .release_channels_info
-                                            .as_ref()
-                                            .unwrap()
-                                            .stable[0]
-                                            .version
-                                            .clone(),
-                                        release_channel: ReleaseChannelType::Stable,
-                                    },
-                                    "Stable",
-                                );
-                                ui.selectable_value(
-                                    &mut version_popup.version,
-                                    Version {
-                                        version: self
-                                            .release_channels_info
-                                            .as_ref()
-                                            .unwrap()
-                                            .nightly[0]
-                                            .version
-                                            .clone(),
-                                        release_channel: ReleaseChannelType::Nightly,
-                                    },
-                                    "Nightly",
-                                );
+                Some(|ui: &mut Ui| {
+                    let version_str = version.string.clone();
+                    let versions: Vec<_> = match &version.release_channel {
+                        ReleaseChannelType::Stable => release_channels_info
+                            .stable
+                            .iter()
+                            .map(|release| Version {
+                                string: release.version.clone(),
+                                release_channel: ReleaseChannelType::Stable,
                             })
-                    });
-                    ui.end_row();
+                            .collect(),
 
-                    ui.label("Version");
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        ComboBox::from_id_source("version")
-                            .selected_text(version_str)
-                            .show_ui(ui, |ui| {
-                                for version in versions {
+                        ReleaseChannelType::Nightly => release_channels_info
+                            .nightly
+                            .iter()
+                            .map(|release| Version {
+                                string: release.version.clone(),
+                                release_channel: ReleaseChannelType::Nightly,
+                            })
+                            .collect(),
+                    };
+                    let installations_with_session: Vec<_> = self
+                        .installations
+                        .iter()
+                        .filter(|installation| installation.has_session_json)
+                        .map(|installation| installation.version.clone())
+                        .collect();
+
+                    Grid::new("add-version-grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Channel");
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            let channel_str = match version.release_channel {
+                                ReleaseChannelType::Stable => "Stable",
+                                ReleaseChannelType::Nightly => "Nightly",
+                            };
+
+                            ComboBox::from_id_salt("channel")
+                                .selected_text(channel_str)
+                                .show_ui(ui, |ui| {
                                     ui.selectable_value(
-                                        &mut version_popup.version,
-                                        version.clone(),
-                                        version.version,
+                                        &mut version,
+                                        Version {
+                                            string: release_channels_info.stable[0].version.clone(),
+                                            release_channel: ReleaseChannelType::Stable,
+                                        },
+                                        "Stable",
                                     );
-                                }
-                            })
-                    });
-                    ui.end_row();
-                });
-                ui.columns(2, |ui| {
-                    if ui[0].button("Cancel").clicked() {
-                        return Popup::None;
-                    }
+                                    ui.selectable_value(
+                                        &mut version,
+                                        Version {
+                                            string: release_channels_info.nightly[0]
+                                                .version
+                                                .clone(),
+                                            release_channel: ReleaseChannelType::Nightly,
+                                        },
+                                        "Nightly",
+                                    );
+                                })
+                        });
+                        ui.end_row();
 
-                    if ui[1].button("Install").clicked() {
-                        self.ui_message_sender
-                            .send(UiMessage::InstallServer(
-                                match &version_popup.version.release_channel {
-                                    ReleaseChannelType::Stable => release_channels_info
-                                        .stable
-                                        .iter()
-                                        .find(|release| {
-                                            release.version == version_popup.version.version
-                                        })
-                                        .unwrap()
-                                        .clone(),
-                                    ReleaseChannelType::Nightly => release_channels_info
-                                        .nightly
-                                        .iter()
-                                        .find(|release| {
-                                            release.version == version_popup.version.version
-                                        })
-                                        .unwrap()
-                                        .clone(),
-                                },
-                            ))
-                            .unwrap();
-                        return Popup::None;
-                    }
+                        ui.label("Version");
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            ComboBox::from_id_salt("version")
+                                .selected_text(version_str)
+                                .show_ui(ui, |ui| {
+                                    for ver in versions {
+                                        ui.selectable_value(&mut version, ver.clone(), ver.string);
+                                    }
+                                })
+                        });
+                        ui.end_row();
 
-                    Popup::Version(version_popup)
-                })
-            })
-            .unwrap()
-            .inner
-            .unwrap()
-    }
-
-    fn edit_popup(&self, ctx: &Context, version: String) -> Popup {
-        Window::new("Edit version")
-            .anchor(Align2::CENTER_CENTER, (0.0, 0.0))
-            .resizable(false)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
-                    if ui.button("Delete version").clicked() {
-                        return Popup::DeleteInstallation(version);
-                    };
-                    if ui.button("Close").clicked() {
-                        return Popup::None;
-                    }
-
-                    Popup::EditVersion(version)
-                })
-                .inner
-            })
-            .unwrap()
-            .inner
-            .unwrap()
-    }
-
-    fn delete_popup(&mut self, ctx: &Context, version: String) -> Popup {
-        Window::new("Are you sure?")
-            .anchor(Align2::CENTER_CENTER, (0.0, 0.0))
-            .resizable(false)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                    ui.label(format!("This will permanently delete version {}", version));
-                });
-                ui.columns(2, |ui| {
-                    if ui[0].button("Cancel").clicked() {
-                        return Popup::None;
-                    }
-                    if ui[1].button("Delete version").clicked() {
-                        if let Err(e) = actions::delete_installation(&version) {
-                            self.state = State::Error(format!("Failed to delete version: {e}"));
+                        if cfg!(windows) {
+                            ui.label("Copy session from:");
+                            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                                ComboBox::from_id_salt("session")
+                                    .selected_text(session_version.clone().unwrap_or("None".into()))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut session_version, None, "None");
+                                        for ver_str in installations_with_session {
+                                            ui.selectable_value(
+                                                &mut session_version,
+                                                Some(ver_str.clone()),
+                                                ver_str,
+                                            );
+                                        }
+                                    })
+                            });
+                            ui.end_row();
                         }
-
-                        self.installations = actions::get_installations();
-
-                        return Popup::None;
-                    }
-                    Popup::DeleteInstallation(version)
+                    });
                 })
-            })
-            .unwrap()
-            .inner
-            .unwrap()
+            },
+            &[ModalButton::Cancel, ModalButton::Custom("Install".into())],
+            None,
+        );
+
+        match response {
+            Some(ModalButton::Cancel) => PopupType::None,
+            Some(ModalButton::Custom(_)) => {
+                let release_info = match &version.release_channel {
+                    ReleaseChannelType::Stable => self
+                        .release_channels_info
+                        .as_ref()
+                        .unwrap()
+                        .stable
+                        .iter()
+                        .find(|release| release.version == version.string)
+                        .unwrap()
+                        .clone(),
+                    ReleaseChannelType::Nightly => self
+                        .release_channels_info
+                        .as_ref()
+                        .unwrap()
+                        .nightly
+                        .iter()
+                        .find(|release| release.version == version.string)
+                        .unwrap()
+                        .clone(),
+                };
+
+                self.ui_message_sender
+                    .send(UiMessage::InstallServer {
+                        release_info,
+                        session_version,
+                    })
+                    .ok();
+
+                PopupType::None
+            }
+            _ => PopupType::AddVersion {
+                version_selection: version,
+                session_version_selection: session_version,
+            },
+        }
+    }
+
+    fn edit_popup(&self, ctx: &Context, version: String) -> PopupType {
+        let mut delete_version = false;
+        let response = alvr_gui_common::modal(
+            ctx,
+            "Edit version",
+            Some(|ui: &mut Ui| {
+                ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
+                    delete_version = ui.button("Delete version").clicked();
+                });
+            }),
+            &[ModalButton::Close],
+            None,
+        );
+
+        if delete_version {
+            PopupType::DeleteInstallation(version)
+        } else if matches!(response, Some(ModalButton::Close)) {
+            PopupType::None
+        } else {
+            PopupType::EditVersion(version)
+        }
+    }
+
+    fn delete_popup(&mut self, ctx: &Context, version: String) -> PopupType {
+        let response = alvr_gui_common::modal(
+            ctx,
+            "Are you sure?",
+            Some({
+                let version = version.clone();
+                move |ui: &mut Ui| {
+                    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                        ui.label(format!("This will permanently delete version {version}"));
+                    });
+                }
+            }),
+            &[
+                ModalButton::Cancel,
+                ModalButton::Custom("Delete version".into()),
+            ],
+            None,
+        );
+
+        match response {
+            Some(ModalButton::Cancel) => PopupType::None,
+            Some(ModalButton::Custom(_)) => {
+                if let Err(e) = actions::delete_installation(&version) {
+                    self.state = State::Error(format!("Failed to delete version: {e}"));
+                }
+
+                self.installations = actions::get_installations();
+
+                PopupType::None
+            }
+            _ => PopupType::DeleteInstallation(version),
+        }
     }
 }
 
@@ -292,7 +317,7 @@ impl eframe::App for Launcher {
                                         ui.label(&installation.version);
                                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                                             if ui.button("Edit").clicked() {
-                                                self.popup = Popup::EditVersion(
+                                                self.popup = PopupType::EditVersion(
                                                     installation.version.clone(),
                                                 );
                                             }
@@ -323,7 +348,7 @@ impl eframe::App for Launcher {
                                                         .send(UiMessage::InstallClient(
                                                             release_info,
                                                         ))
-                                                        .unwrap();
+                                                        .ok();
                                                 } else {
                                                     self.state = State::Error(
                                                         "Failed to get release info".into(),
@@ -338,7 +363,7 @@ impl eframe::App for Launcher {
                                                     Ok(()) => {
                                                         self.ui_message_sender
                                                             .send(UiMessage::Quit)
-                                                            .unwrap();
+                                                            .ok();
                                                         ctx.send_viewport_cmd(
                                                             ViewportCommand::Close,
                                                         );
@@ -360,21 +385,25 @@ impl eframe::App for Launcher {
                         )
                         .clicked()
                     {
-                        self.popup = Popup::Version(VersionPopup {
-                            version: Version {
-                                version: self.release_channels_info.as_ref().unwrap().stable[0]
+                        self.popup = PopupType::AddVersion {
+                            version_selection: Version {
+                                string: self.release_channels_info.as_ref().unwrap().stable[0]
                                     .version
                                     .clone(),
                                 release_channel: ReleaseChannelType::Stable,
                             },
-                        });
+                            session_version_selection: None,
+                        };
                     }
 
                     let popup = match mem::take(&mut self.popup) {
-                        Popup::Version(version_popup) => self.version_popup(ctx, version_popup),
-                        Popup::EditVersion(version) => self.edit_popup(ctx, version),
-                        Popup::DeleteInstallation(version) => self.delete_popup(ctx, version),
-                        Popup::None => Popup::None,
+                        PopupType::AddVersion {
+                            version_selection,
+                            session_version_selection,
+                        } => self.version_popup(ctx, version_selection, session_version_selection),
+                        PopupType::EditVersion(version) => self.edit_popup(ctx, version),
+                        PopupType::DeleteInstallation(version) => self.delete_popup(ctx, version),
+                        PopupType::None => PopupType::None,
                     };
                     self.popup = popup;
                 });
@@ -399,7 +428,7 @@ impl eframe::App for Launcher {
         });
 
         if ctx.input(|i| i.viewport().close_requested()) {
-            self.ui_message_sender.send(UiMessage::Quit).unwrap();
+            self.ui_message_sender.send(UiMessage::Quit).ok();
         }
     }
 }

@@ -19,10 +19,12 @@ void CEncoder::Initialize(std::shared_ptr<CD3DRender> d3dRender) {
     uint32_t encoderWidth, encoderHeight;
     m_FrameRender->GetEncodingResolution(&encoderWidth, &encoderHeight);
 
+    Exception vplException;
     Exception vceException;
     Exception nvencException;
 #ifdef ALVR_GPL
     Exception swException;
+
     if (Settings::Instance().m_force_sw_encoding) {
         try {
             Debug("Try to use VideoEncoderSW.\n");
@@ -53,6 +55,14 @@ void CEncoder::Initialize(std::shared_ptr<CD3DRender> d3dRender) {
     } catch (Exception e) {
         nvencException = e;
     }
+    try {
+        Debug("Try to use VideoEncoderVPL.\n");
+        m_videoEncoder = std::make_shared<VideoEncoderVPL>(d3dRender, encoderWidth, encoderHeight);
+        m_videoEncoder->Initialize();
+        return;
+    } catch (Exception e) {
+        vplException = e;
+    }
 #ifdef ALVR_GPL
     try {
         Debug("Try to use VideoEncoderSW.\n");
@@ -63,23 +73,35 @@ void CEncoder::Initialize(std::shared_ptr<CD3DRender> d3dRender) {
         swException = e;
     }
     throw MakeException(
-        "All VideoEncoder are not available. VCE: %s, NVENC: %s, SW: %s",
+        "All VideoEncoder are not available. VCE: %s, NVENC: %s, VPL: %s, SW: %s",
         vceException.what(),
         nvencException.what(),
+        vplException.what(),
         swException.what()
     );
 #else
     throw MakeException(
-        "All VideoEncoder are not available. VCE: %s, NVENC: %s",
+        "All VideoEncoder are not available. VCE: %s, NVENC: %s, VPL: %s",
         vceException.what(),
-        nvencException.what()
+        nvencException.what(),
+        vplException.what()
     );
 #endif
+}
+
+void CEncoder::SetViewParams(
+    vr::HmdRect2_t projLeft,
+    vr::HmdMatrix34_t eyeToHeadLeft,
+    vr::HmdRect2_t projRight,
+    vr::HmdMatrix34_t eyeToHeadRight
+) {
+    m_FrameRender->SetViewParams(projLeft, eyeToHeadLeft, projRight, eyeToHeadRight);
 }
 
 bool CEncoder::CopyToStaging(
     ID3D11Texture2D* pTexture[][2],
     vr::VRTextureBounds_t bounds[][2],
+    vr::HmdMatrix34_t poses[],
     int layerCount,
     bool recentering,
     uint64_t presentationTime,
@@ -91,7 +113,9 @@ bool CEncoder::CopyToStaging(
     m_targetTimestampNs = targetTimestampNs;
     m_FrameRender->Startup();
 
-    m_FrameRender->RenderFrame(pTexture, bounds, layerCount, recentering, message, debugText);
+    m_FrameRender->RenderFrame(
+        pTexture, bounds, poses, layerCount, recentering, message, debugText
+    );
     return true;
 }
 
@@ -132,8 +156,6 @@ void CEncoder::NewFrameReady() {
 void CEncoder::WaitForEncode() { m_encodeFinished.Wait(); }
 
 void CEncoder::OnStreamStart() { m_scheduler.OnStreamStart(); }
-
-void CEncoder::OnPacketLoss() { m_scheduler.OnPacketLoss(); }
 
 void CEncoder::InsertIDR() { m_scheduler.InsertIDR(); }
 
