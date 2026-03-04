@@ -487,10 +487,9 @@ impl StreamContext {
                             .image_rect(rect),
                     ),
             ],
-            self.config
-                .passthrough
-                .clone()
-                .map(|mode| ProjectionLayerAlphaConfig {
+            self.config.passthrough.clone().and_then(|mode| match mode {
+                PassthroughMode::MetaLutOverlay(_) => None,
+                _ => Some(ProjectionLayerAlphaConfig {
                     premultiplied: matches!(
                         mode,
                         PassthroughMode::Blend {
@@ -500,6 +499,7 @@ impl StreamContext {
                             | PassthroughMode::HsvChromaKey(_)
                     ),
                 }),
+            }),
             clientside_post_processing,
         );
 

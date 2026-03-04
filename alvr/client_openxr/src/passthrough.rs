@@ -1,5 +1,6 @@
 use crate::extra_extensions::{PassthroughFB, PassthroughHTC};
 use alvr_common::anyhow::{Result, bail};
+use alvr_session::PassthroughMode;
 use alvr_system_info::Platform;
 use openxr::{self as xr};
 use std::{marker::PhantomData, ops::Deref, ptr};
@@ -29,6 +30,16 @@ impl PassthroughLayer<'_> {
             handle_htc,
             _marker: PhantomData,
         })
+    }
+
+    pub fn update_style(
+        &mut self,
+        session: &xr::Session<xr::OpenGlEs>,
+        mode: Option<&PassthroughMode>,
+    ) {
+        if let Some(handle) = &mut self.handle_fb {
+            let _ = handle.update_style(session, mode);
+        }
     }
 }
 

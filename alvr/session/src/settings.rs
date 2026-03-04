@@ -619,6 +619,28 @@ pub struct HsvChromaKeyConfig {
     pub value_end_max: f32,
 }
 
+
+#[derive(SettingsSchema, Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct MetaLutOverlayConfig {
+    #[schema(flag = "real-time")]
+    #[schema(gui(slider(min = 0.0, max = 1.0, step = 0.01)))]
+    pub weight: f32,
+
+    #[schema(flag = "real-time")]
+    pub lut_resolution: u32,
+
+    #[schema(flag = "real-time")]
+    pub hue_center_deg: f32,
+    #[schema(flag = "real-time")]
+    pub hue_width_deg: f32,
+    #[schema(flag = "real-time")]
+    pub sat_min: f32,
+    #[schema(flag = "real-time")]
+    pub val_min: f32,
+    #[schema(flag = "real-time")]
+    pub feather: f32,
+}
+
 #[derive(SettingsSchema, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[schema(gui = "button_group")]
 pub enum PassthroughMode {
@@ -640,6 +662,9 @@ This is a similar effect to AR glasses."
 
     #[schema(strings(display_name = "HSV Chroma Key"))]
     HsvChromaKey(#[schema(flag = "real-time")] HsvChromaKeyConfig),
+
+    #[schema(strings(display_name = "Meta LUT Overlay (greenscreen)"))]
+    MetaLutOverlay(#[schema(flag = "real-time")] MetaLutOverlayConfig),
 }
 
 #[repr(u8)]

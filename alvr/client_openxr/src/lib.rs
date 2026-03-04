@@ -15,12 +15,12 @@ use alvr_common::{
     parking_lot::RwLock,
 };
 use alvr_graphics::GraphicsContext;
-use alvr_session::{BodyTrackingBDConfig, BodyTrackingSourcesConfig, PerformanceLevel};
+use alvr_session::{BodyTrackingBDConfig, BodyTrackingSourcesConfig, PassthroughMode, PerformanceLevel};
 use alvr_system_info::Platform;
 use extra_extensions::{
     BD_BODY_TRACKING_EXTENSION_NAME, BD_MOTION_TRACKING_EXTENSION_NAME,
     META_BODY_TRACKING_FIDELITY_EXTENSION_NAME, META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
-    META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+    META_DETACHED_CONTROLLERS_EXTENSION_NAME, META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME,
     META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME, PICO_CONFIGURATION_EXTENSION_NAME,
 };
 use interaction::{InteractionContext, InteractionSourcesConfig};
@@ -239,6 +239,7 @@ pub fn entry_point() {
                 META_BODY_TRACKING_FIDELITY_EXTENSION_NAME,
                 META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
                 META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+                META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME,
                 BD_BODY_TRACKING_EXTENSION_NAME,
                 BD_MOTION_TRACKING_EXTENSION_NAME,
                 PICO_CONFIGURATION_EXTENSION_NAME,
@@ -559,6 +560,10 @@ pub fn entry_point() {
                             );
                         }
 
+                        if let Some(passthrough_layer) = &mut passthrough_layer {
+                            passthrough_layer.update_style(&xr_session, config.passthrough.as_ref());
+                        }
+
                         if let Some(stream) = &mut stream_context {
                             stream.update_real_time_config(&config);
                         }
@@ -599,11 +604,21 @@ pub fn entry_point() {
                 (lobby.render(vsync_time), vsync_time)
             };
 
+            let projection_layer = layer.build();
+            let is_meta_lut_overlay = stream_context
+                .as_ref()
+                .and_then(|stream| stream.config.passthrough.as_ref())
+                .is_some_and(|mode| matches!(mode, PassthroughMode::MetaLutOverlay(_)));
+
             let layers: &[&xr::CompositionLayerBase<_>] =
                 if let Some(passthrough_layer) = &passthrough_layer {
-                    &[passthrough_layer, &layer.build()]
+                    if is_meta_lut_overlay {
+                        &[&projection_layer, passthrough_layer]
+                    } else {
+                        &[passthrough_layer, &projection_layer]
+                    }
                 } else {
-                    &[&layer.build()]
+                    &[&projection_layer]
                 };
 
             graphics_context.make_current();
