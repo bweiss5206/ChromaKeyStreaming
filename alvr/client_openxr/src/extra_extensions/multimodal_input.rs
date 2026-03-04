@@ -11,6 +11,7 @@ use std::{ffi::c_void, ptr, sync::LazyLock};
 pub const META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME: &str =
     "XR_META_simultaneous_hands_and_controllers";
 pub const META_DETACHED_CONTROLLERS_EXTENSION_NAME: &str = "XR_META_detached_controllers";
+pub const META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME: &str = "XR_META_passthrough_color_lut";
 
 static TYPE_SYSTEM_SIMULTANEOUS_HANDS_AND_CONTROLLERS_PROPERTIES_META: LazyLock<xr::StructureType> =
     LazyLock::new(|| xr::StructureType::from_raw(1000532001));
