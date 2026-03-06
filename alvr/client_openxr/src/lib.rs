@@ -598,11 +598,17 @@ pub fn entry_point() {
             }
 
             // todo: allow rendering lobby and stream layers at the same time and add cross fade
-            let (layer, display_time) = if let Some(stream) = &mut stream_context {
-                stream.render(frame_interval, vsync_time)
-            } else {
-                (lobby.render(vsync_time), vsync_time)
-            };
+            let (layer, display_time, is_meta_lut_overlay) =
+                if let Some(stream) = &mut stream_context {
+                    let is_meta_lut_overlay = stream.is_meta_lut_overlay_passthrough();
+                    let (layer, display_time) = stream.render(frame_interval, vsync_time);
+
+                    (layer, display_time, is_meta_lut_overlay)
+                } else {
+                    (lobby.render(vsync_time), vsync_time, false)
+                };
+
+            let projection_layer = layer.build();
 
             let projection_layer = layer.build();
             let is_meta_lut_overlay = stream_context

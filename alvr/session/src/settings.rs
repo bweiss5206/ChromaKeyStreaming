@@ -1719,6 +1719,15 @@ pub fn session_settings_default() -> SettingsDefault {
                         value_end_min: 1.0,
                         value_end_max: 1.1,
                     },
+                    MetaLutOverlay: MetaLutOverlayConfigDefault {
+                        weight: 1.0,
+                        lut_resolution: 32,
+                        hue_center_deg: 120.0,
+                        hue_width_deg: 60.0,
+                        sat_min: 0.2,
+                        val_min: 0.2,
+                        feather: 0.1,
+                    },
                 },
             },
             clientside_post_processing: SwitchDefault {
