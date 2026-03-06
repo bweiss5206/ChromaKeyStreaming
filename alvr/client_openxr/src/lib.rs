@@ -20,7 +20,7 @@ use alvr_system_info::Platform;
 use extra_extensions::{
     BD_BODY_TRACKING_EXTENSION_NAME, BD_MOTION_TRACKING_EXTENSION_NAME,
     META_BODY_TRACKING_FIDELITY_EXTENSION_NAME, META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
-    META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+    META_DETACHED_CONTROLLERS_EXTENSION_NAME, META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME,
     META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME, PICO_CONFIGURATION_EXTENSION_NAME,
 };
 use interaction::{InteractionContext, InteractionSourcesConfig};
@@ -239,6 +239,7 @@ pub fn entry_point() {
                 META_BODY_TRACKING_FIDELITY_EXTENSION_NAME,
                 META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
                 META_DETACHED_CONTROLLERS_EXTENSION_NAME,
+                META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME,
                 BD_BODY_TRACKING_EXTENSION_NAME,
                 BD_MOTION_TRACKING_EXTENSION_NAME,
                 PICO_CONFIGURATION_EXTENSION_NAME,
@@ -559,6 +560,10 @@ pub fn entry_point() {
                             );
                         }
 
+                        if let Some(passthrough_layer) = &mut passthrough_layer {
+                            passthrough_layer.update_style(&xr_session, config.passthrough.as_ref());
+                        }
+
                         if let Some(stream) = &mut stream_context {
                             stream.update_real_time_config(&config);
                         }
@@ -593,17 +598,27 @@ pub fn entry_point() {
             }
 
             // todo: allow rendering lobby and stream layers at the same time and add cross fade
-            let (layer, display_time) = if let Some(stream) = &mut stream_context {
-                stream.render(frame_interval, vsync_time)
-            } else {
-                (lobby.render(vsync_time), vsync_time)
-            };
+            let (layer, display_time, is_meta_lut_overlay) =
+                if let Some(stream) = &mut stream_context {
+                    let is_meta_lut_overlay = stream.is_meta_lut_overlay_passthrough();
+                    let (layer, display_time) = stream.render(frame_interval, vsync_time);
+
+                    (layer, display_time, is_meta_lut_overlay)
+                } else {
+                    (lobby.render(vsync_time), vsync_time, false)
+                };
+
+            let projection_layer = layer.build();
 
             let layers: &[&xr::CompositionLayerBase<_>] =
                 if let Some(passthrough_layer) = &passthrough_layer {
-                    &[passthrough_layer, &layer.build()]
+                    if is_meta_lut_overlay {
+                        &[&projection_layer, passthrough_layer]
+                    } else {
+                        &[passthrough_layer, &projection_layer]
+                    }
                 } else {
-                    &[&layer.build()]
+                    &[&projection_layer]
                 };
 
             graphics_context.make_current();

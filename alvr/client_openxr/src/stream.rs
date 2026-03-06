@@ -254,6 +254,13 @@ impl StreamContext {
         self.config.passthrough.is_some()
     }
 
+    pub fn is_meta_lut_overlay_passthrough(&self) -> bool {
+        self.config
+            .passthrough
+            .as_ref()
+            .is_some_and(|mode| matches!(mode, PassthroughMode::MetaLutOverlay(_)))
+    }
+
     pub fn update_reference_space(&mut self) {
         self.input_thread_running.set(false);
 
@@ -487,10 +494,9 @@ impl StreamContext {
                             .image_rect(rect),
                     ),
             ],
-            self.config
-                .passthrough
-                .clone()
-                .map(|mode| ProjectionLayerAlphaConfig {
+            self.config.passthrough.clone().and_then(|mode| match mode {
+                PassthroughMode::MetaLutOverlay(_) => None,
+                _ => Some(ProjectionLayerAlphaConfig {
                     premultiplied: matches!(
                         mode,
                         PassthroughMode::Blend {
@@ -500,6 +506,7 @@ impl StreamContext {
                             | PassthroughMode::HsvChromaKey(_)
                     ),
                 }),
+            }),
             clientside_post_processing,
         );
 

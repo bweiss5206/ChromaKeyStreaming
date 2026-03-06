@@ -377,6 +377,10 @@ fn set_passthrough_push_constants(render_pass: &mut RenderPass, config: Option<&
             set_u32(render_pass, PASSTHROUGH_MODE_OFFSET, 0);
             set_float(render_pass, ALPHA_CONST_OFFSET, 1. - threshold);
         }
+        Some(PassthroughMode::MetaLutOverlay(_)) => {
+            set_u32(render_pass, PASSTHROUGH_MODE_OFFSET, 0);
+            set_float(render_pass, ALPHA_CONST_OFFSET, 1.);
+        }
         Some(PassthroughMode::RgbChromaKey(config)) => {
             set_u32(render_pass, PASSTHROUGH_MODE_OFFSET, 1);
 
