@@ -4,9 +4,9 @@ pub use settings::*;
 pub use settings_schema;
 
 use alvr_common::{
-    anyhow::{bail, Result},
+    ALVR_VERSION, ConnectionState, ToAny,
+    anyhow::{Result, bail},
     semver::Version,
-    ConnectionState, ToAny, ALVR_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json as json;
@@ -14,18 +14,11 @@ use settings_schema::{NumberType, SchemaNode};
 use std::{
     collections::{HashMap, HashSet},
     net::IpAddr,
-    path::PathBuf,
 };
 
 // SessionSettings is similar to Settings but it contains every branch, even unused ones. This is
 // the settings representation that the UI uses.
 pub type SessionSettings = settings::SettingsDefault;
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct DriversBackup {
-    pub alvr_path: PathBuf,
-    pub other_paths: Vec<PathBuf>,
-}
 
 // This structure is used to store the minimum configuration data that ALVR driver needs to
 // initialize OpenVR before having the chance to communicate with a client. When a client is
@@ -35,6 +28,7 @@ pub struct DriversBackup {
 // dynamically.
 // todo: properties that can be set after the OpenVR initialization should be removed and set with
 // UpdateForStream.
+#[expect(clippy::pub_underscore_fields)]
 #[derive(Serialize, Deserialize, PartialEq, Default, Clone, Debug)]
 pub struct OpenvrConfig {
     pub eye_resolution_width: u32,
@@ -43,24 +37,23 @@ pub struct OpenvrConfig {
     pub target_eye_resolution_height: u32,
     pub tracking_ref_only: bool,
     pub enable_vive_tracker_proxy: bool,
-    pub aggressive_keyframe_resend: bool,
+    pub minimum_idr_interval_ms: u64,
     pub adapter_index: u32,
     pub codec: u8,
     pub h264_profile: u32,
     pub refresh_rate: u32,
     pub use_10bit_encoder: bool,
-    pub use_full_range_encoding: bool,
     pub encoding_gamma: f32,
     pub enable_hdr: bool,
     pub force_hdr_srgb_correction: bool,
     pub clamp_hdr_extended_range: bool,
-    pub enable_pre_analysis: bool,
+    pub enable_amf_pre_analysis: bool,
     pub enable_vbaq: bool,
-    pub enable_hmqb: bool,
-    pub use_preproc: bool,
-    pub preproc_sigma: u32,
-    pub preproc_tor: u32,
-    pub amd_encoder_quality_preset: u32,
+    pub enable_amf_hmqb: bool,
+    pub use_amf_preproc: bool,
+    pub amf_preproc_sigma: u32,
+    pub amf_preproc_tor: u32,
+    pub encoder_quality_preset: u32,
     pub rate_control_mode: u32,
     pub filler_data: bool,
     pub entropy_coding: u32,
@@ -105,10 +98,21 @@ pub struct OpenvrConfig {
     pub nvenc_enable_weighted_prediction: bool,
     pub capture_frame_dir: String,
     pub amd_bitrate_corruption_fix: bool,
+    pub use_separate_hand_trackers: bool,
 
     // these settings are not used on the C++ side, but we need them to correctly trigger a SteamVR
     // restart
     pub _controller_profile: i32,
+    pub _server_impl_debug: bool,
+    pub _client_impl_debug: bool,
+    pub _server_core_debug: bool,
+    pub _client_core_debug: bool,
+    pub _connection_debug: bool,
+    pub _sockets_debug: bool,
+    pub _server_gfx_debug: bool,
+    pub _client_gfx_debug: bool,
+    pub _encoder_debug: bool,
+    pub _decoder_debug: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -118,13 +122,11 @@ pub struct ClientConnectionConfig {
     pub manual_ips: HashSet<IpAddr>,
     pub trusted: bool,
     pub connection_state: ConnectionState,
-    pub cabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SessionConfig {
     pub server_version: Version,
-    pub drivers_backup: Option<DriversBackup>,
     pub openvr_config: OpenvrConfig,
     // The hashmap key is the hostname
     pub client_connections: HashMap<String, ClientConnectionConfig>,
@@ -135,7 +137,6 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             server_version: ALVR_VERSION.clone(),
-            drivers_backup: None,
             openvr_config: OpenvrConfig {
                 // avoid realistic resolutions, as on first start, on Linux, it
                 // could trigger direct mode on an existing monitor
@@ -176,7 +177,7 @@ impl SessionConfig {
         }
 
         // Note: unwrap is safe because current session is expected to serialize correctly
-        let old_session_json = json::to_value(&self).unwrap();
+        let old_session_json = json::to_value(self.clone()).unwrap();
         let old_session_fields = old_session_json.as_object().unwrap();
 
         let maybe_session_settings_json =
@@ -282,8 +283,10 @@ fn extrapolate_session_settings_from_session_settings(
                         .iter()
                         .any(|named_entry| *variant_str == named_entry.name)
                 })
-                .map(json::Value::String)
-                .unwrap_or_else(|| old_session_settings["variant"].clone());
+                .map_or_else(
+                    || old_session_settings["variant"].clone(),
+                    json::Value::String,
+                );
 
             let mut fields: json::Map<_, _> = variants
                 .iter()
@@ -419,8 +422,10 @@ fn extrapolate_session_settings_from_session_settings(
                             })
                             .collect()
                     })
-                    .map(json::Value::Array)
-                    .unwrap_or_else(|| old_session_settings["content"].clone());
+                    .map_or_else(
+                        || old_session_settings["content"].clone(),
+                        json::Value::Array,
+                    );
 
             json::json!({
                 "gui_collapsed": gui_collapsed,
@@ -466,8 +471,10 @@ fn extrapolate_session_settings_from_session_settings(
                     })
                     .collect()
             })
-            .map(json::Value::Array)
-            .unwrap_or_else(|| old_session_settings["content"].clone());
+            .map_or_else(
+                || old_session_settings["content"].clone(),
+                json::Value::Array,
+            );
 
             json::json!({
                 "gui_collapsed": gui_collapsed,

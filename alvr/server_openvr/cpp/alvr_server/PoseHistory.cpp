@@ -12,10 +12,10 @@ void PoseHistory::OnPoseUpdated(uint64_t targetTimestampNs, FfiDeviceMotion moti
     history.motion = motion;
 
     HmdMatrix_QuatToMat(
-        motion.orientation.w,
-        motion.orientation.x,
-        motion.orientation.y,
-        motion.orientation.z,
+        motion.pose.orientation.w,
+        motion.pose.orientation.x,
+        motion.pose.orientation.y,
+        motion.pose.orientation.z,
         &history.rotationMatrix
     );
 
@@ -63,6 +63,8 @@ PoseHistory::GetBestPoseMatch(const vr::HmdMatrix34_t& pose) const {
     if (minIt != m_poseBuffer.end()) {
         return *minIt;
     }
+
+    Debug("PoseHistory::GetBestPoseMatch: No pose matched.");
     return {};
 }
 
@@ -73,6 +75,8 @@ std::optional<PoseHistory::TrackingHistoryFrame> PoseHistory::GetPoseAt(uint64_t
         if (it->targetTimestampNs == timestampNs)
             return *it;
     }
+
+    Debug("PoseHistory::GetPoseAt: No pose matched.");
     return {};
 }
 

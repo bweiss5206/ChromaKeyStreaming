@@ -1,4 +1,5 @@
 mod build;
+mod ci;
 mod command;
 mod dependencies;
 mod format;
@@ -8,9 +9,11 @@ mod version;
 use crate::build::Profile;
 use afs::Layout;
 use alvr_filesystem as afs;
+use dependencies::OpenXRLoadersSelection;
+use packaging::ReleaseFlavor;
 use pico_args::Arguments;
-use std::{fs, time::Instant};
-use xshell::{cmd, Shell};
+use std::{fs, process, time::Instant};
+use xshell::{Shell, cmd};
 
 const HELP_STR: &str = r#"
 cargo xtask
@@ -32,7 +35,8 @@ SUBCOMMANDS:
     format              Autoformat all code
     check-format        Check if code is correctly formatted
     package-streamer    Build streamer with distribution profile, make archive
-    package-launcher    Build launcher in release mode, make portable and installer versions
+    package-launcher    Build launcher with distribution profile, make archive
+    package-client      Build client with distribution profile
     package-client-lib  Build client library then zip it
     clean               Removes all build artifacts and dependencies
     bump                Bump streamer and client package versions
@@ -46,19 +50,33 @@ FLAGS:
     --release           Optimized build with less debug checks. For build subcommands
     --profiling         Enable Profiling
     --gpl               Bundle GPL libraries (FFmpeg). Only for Windows
-    --appimage          Package as AppImage. For package-streamer subcommand
-    --zsync             For --appimage, create .zsync update file and build AppImage with embedded update information. For package-streamer subcommand
     --nightly           Append nightly tag to versions. For bump subcommand
     --no-rebuild        Do not rebuild the streamer with run-streamer
     --ci                Do some CI related tweaks. Depends on the other flags and subcommand
     --no-stdcpp         Disable linking to libc++_shared with build-client-lib
+    --all-targets       For prepare-deps and build-client-lib subcommand, will build for all android supported ABI targets
+    --meta-store        For package-client subcommand, build for Meta Store
+    --pico-store        For package-client subcommand, build for Pico Store
 
 ARGS:
-    --platform <NAME>   Name of the platform (operative system or hardware name). snake_case
+    --platform <NAME>   Can be one of: windows, linux, macos, android. Can be omitted
     --version <VERSION> Specify version to set with the bump-versions subcommand
     --root <PATH>       Installation root. By default no root is set and paths are calculated using
-                        relative paths, which requires conforming to FHS on Linux.
+                        relative paths, which requires conforming to FHS on Linux
 "#;
+
+enum BuildPlatform {
+    Windows,
+    Linux,
+    Macos,
+    Android,
+}
+
+pub fn print_help_and_exit(message: &str) -> ! {
+    eprintln!("\n{message}");
+    eprintln!("{HELP_STR}");
+    process::exit(1);
+}
 
 pub fn run_streamer() {
     let sh = Shell::new().unwrap();
@@ -164,94 +182,108 @@ fn main() {
         let no_rebuild = args.contains("--no-rebuild");
         let for_ci = args.contains("--ci");
         let keep_config = args.contains("--keep-config");
-        let appimage = args.contains("--appimage");
-        let zsync = args.contains("--zsync");
         let link_stdcpp = !args.contains("--no-stdcpp");
+        let all_targets = args.contains("--all-targets");
 
         let platform: Option<String> = args.opt_value_from_str("--platform").unwrap();
+        let platform = platform.as_deref().map(|platform| match platform {
+            "windows" => BuildPlatform::Windows,
+            "linux" => BuildPlatform::Linux,
+            "macos" => BuildPlatform::Macos,
+            "android" => BuildPlatform::Android,
+            _ => print_help_and_exit("Unrecognized platform"),
+        });
+
         let version: Option<String> = args.opt_value_from_str("--version").unwrap();
         let root: Option<String> = args.opt_value_from_str("--root").unwrap();
+
+        let package_flavor = if args.contains("--meta-store") {
+            ReleaseFlavor::MetaStore
+        } else if args.contains("--pico-store") {
+            ReleaseFlavor::PicoStore
+        } else {
+            ReleaseFlavor::GitHub
+        };
 
         if args.finish().is_empty() {
             match subcommand.as_str() {
                 "prepare-deps" => {
                     if let Some(platform) = platform {
-                        match platform.as_str() {
-                            "windows" => dependencies::prepare_windows_deps(for_ci),
-                            "linux" => dependencies::prepare_linux_deps(!no_nvidia),
-                            "macos" => dependencies::prepare_macos_deps(),
-                            "android" => dependencies::build_android_deps(for_ci),
-                            _ => panic!("Unrecognized platform."),
+                        if matches!(platform, BuildPlatform::Android) {
+                            dependencies::build_android_deps(
+                                for_ci,
+                                all_targets,
+                                OpenXRLoadersSelection::All,
+                            );
+                        } else {
+                            dependencies::prepare_server_deps(Some(platform), for_ci, !no_nvidia);
                         }
                     } else {
-                        if cfg!(windows) {
-                            dependencies::prepare_windows_deps(for_ci);
-                        } else if cfg!(target_os = "linux") {
-                            dependencies::prepare_linux_deps(!no_nvidia);
-                        }
+                        dependencies::prepare_server_deps(platform, for_ci, !no_nvidia);
 
-                        dependencies::build_android_deps(for_ci);
+                        dependencies::build_android_deps(
+                            for_ci,
+                            all_targets,
+                            OpenXRLoadersSelection::All,
+                        );
                     }
                 }
                 "build-streamer" => {
-                    build::build_streamer(profile, true, gpl, None, false, profiling, keep_config)
+                    build::build_streamer(profile, gpl, None, false, profiling, keep_config)
                 }
-                "build-launcher" => build::build_launcher(profile, true, false),
-                "build-server-lib" => build::build_server_lib(profile, true, None, false),
+                "build-launcher" => build::build_launcher(profile, false),
+                "build-server-lib" => build::build_server_lib(profile, None, false),
                 "build-client" => build::build_android_client(profile),
-                "build-client-lib" => build::build_android_client_core_lib(profile, link_stdcpp),
+                "build-client-lib" => {
+                    build::build_android_client_core_lib(profile, link_stdcpp, all_targets)
+                }
                 "build-client-xr-lib" => {
                     build::build_android_client_openxr_lib(profile, link_stdcpp)
                 }
                 "run-streamer" => {
                     if !no_rebuild {
-                        build::build_streamer(
-                            profile,
-                            true,
-                            gpl,
-                            None,
-                            false,
-                            profiling,
-                            keep_config,
-                        );
+                        build::build_streamer(profile, gpl, None, false, profiling, keep_config);
                     }
                     run_streamer();
                 }
                 "run-launcher" => {
                     if !no_rebuild {
-                        build::build_launcher(profile, true, false);
+                        build::build_launcher(profile, false);
                     }
                     run_launcher();
                 }
-                "package-streamer" => packaging::package_streamer(gpl, root, appimage, zsync),
-                "package-launcher" => packaging::package_launcher(appimage),
-                "package-client" => build::build_android_client(Profile::Distribution),
-                "package-client-lib" => packaging::package_client_lib(link_stdcpp),
+                "package-streamer" => {
+                    packaging::package_streamer(platform, for_ci, !no_nvidia, gpl, root)
+                }
+                "package-launcher" => packaging::package_launcher(),
+                "package-client" => packaging::package_client_openxr(package_flavor, for_ci),
+                "package-client-lib" => packaging::package_client_lib(link_stdcpp, all_targets),
                 "format" => format::format(),
                 "check-format" => format::check_format(),
                 "clean" => clean(),
                 "bump" => version::bump_version(version, is_nightly),
-                "clippy" => clippy(),
-                "check-msrv" => version::check_msrv(),
-                "kill-oculus" => kill_oculus_processes(),
-                _ => {
-                    println!("\nUnrecognized subcommand.");
-                    println!("{HELP_STR}");
-                    return;
+                "clippy" => {
+                    if for_ci {
+                        ci::clippy_ci()
+                    } else {
+                        clippy()
+                    }
                 }
+                "check-msrv" => version::check_msrv(),
+                "check-licenses" => {
+                    packaging::generate_licenses();
+                }
+                "kill-oculus" => kill_oculus_processes(),
+                _ => print_help_and_exit("Unrecognized subcommand."),
             }
         } else {
-            println!("\nWrong arguments.");
-            println!("{HELP_STR}");
-            return;
+            print_help_and_exit("Wrong arguments.");
         }
     } else {
-        println!("\nMissing subcommand.");
-        println!("{HELP_STR}");
-        return;
+        print_help_and_exit("Missing subcommand.");
     }
 
-    let elapsed_time = Instant::now() - begin_time;
+    let elapsed_time = begin_time.elapsed();
     println!(
         "\nDone [{}m {}s]\n",
         elapsed_time.as_secs() / 60,

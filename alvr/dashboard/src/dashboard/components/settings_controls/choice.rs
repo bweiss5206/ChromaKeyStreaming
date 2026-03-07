@@ -1,5 +1,5 @@
-use super::{reset, NestingInfo, SettingControl};
-use crate::dashboard::{basic_components, get_id, DisplayString};
+use super::{NestingInfo, SettingControl, reset};
+use alvr_gui_common::DisplayString;
 use alvr_packets::PathValuePair;
 use alvr_session::settings_schema::{ChoiceControlType, SchemaEntry, SchemaNode};
 use eframe::{
@@ -94,7 +94,7 @@ impl Control {
             variant_indices,
             variant_controls,
             gui: gui.unwrap_or(ChoiceControlType::Dropdown),
-            combobox_id: get_id(),
+            combobox_id: alvr_gui_common::get_id(),
         }
     }
 
@@ -122,11 +122,11 @@ impl Control {
         let mut request = None;
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             if matches!(&self.gui, ChoiceControlType::ButtonGroup) {
-                if basic_components::button_group_clicked(ui, &self.variant_labels, variant_mut) {
+                if alvr_gui_common::button_group_clicked(ui, &self.variant_labels, variant_mut) {
                     request = get_request(&self.nesting_info, variant_mut);
                 }
             } else if let Some(mut index) = self.variant_indices.get(variant_mut).cloned() {
-                let response = ComboBox::from_id_source(self.combobox_id).show_index(
+                let response = ComboBox::from_id_salt(self.combobox_id).show_index(
                     ui,
                     &mut index,
                     self.variant_labels.len(),
@@ -142,7 +142,7 @@ impl Control {
                 }
             } else {
                 let mut index = 0;
-                let response = ComboBox::from_id_source(self.combobox_id).show_index(
+                let response = ComboBox::from_id_salt(self.combobox_id).show_index(
                     ui,
                     &mut index,
                     self.variant_labels.len() + 1,
@@ -171,16 +171,16 @@ impl Control {
             }
         });
 
-        if let Some(control) = self.variant_controls.get_mut(&*variant_mut) {
-            if !matches!(control, SettingControl::None) {
-                ui.end_row();
+        if let Some(control) = self.variant_controls.get_mut(&*variant_mut)
+            && !matches!(control, SettingControl::None)
+        {
+            ui.end_row();
 
-                //fixes "cannot borrow `*session_variants` as mutable more than once at a time"
-                let variant = variant_mut.clone();
-                request = control
-                    .ui(ui, &mut session_variants_mut[&variant], false)
-                    .or(request);
-            }
+            //fixes "cannot borrow `*session_variants` as mutable more than once at a time"
+            let variant = variant_mut.clone();
+            request = control
+                .ui(ui, &mut session_variants_mut[&variant], false)
+                .or(request);
         }
 
         request

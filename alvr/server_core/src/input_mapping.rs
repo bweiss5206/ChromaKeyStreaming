@@ -1,5 +1,4 @@
-use crate::SERVER_DATA_MANAGER;
-use alvr_common::{once_cell::sync::Lazy, settings_schema::Switch, *};
+use alvr_common::*;
 use alvr_packets::{ButtonEntry, ButtonValue};
 use alvr_session::{
     AutomaticButtonMappingConfig, BinaryToScalarStates, ButtonBindingTarget, ButtonMappingType,
@@ -7,18 +6,26 @@ use alvr_session::{
 };
 use std::collections::{HashMap, HashSet};
 
-pub static REGISTERED_BUTTON_SET: Lazy<HashSet<u64>> = Lazy::new(|| {
-    let data_manager_lock = SERVER_DATA_MANAGER.read();
-    let Switch::Enabled(controllers_config) = &data_manager_lock.settings().headset.controllers
-    else {
-        return HashSet::new();
-    };
-
-    match &controllers_config.emulation_mode {
+pub fn registered_button_set(
+    controllers_emulation_mode: &ControllersEmulationMode,
+) -> HashSet<u64> {
+    match &controllers_emulation_mode {
         ControllersEmulationMode::RiftSTouch
+        | ControllersEmulationMode::Quest1Touch
         | ControllersEmulationMode::Quest2Touch
-        | ControllersEmulationMode::Quest3Plus => CONTROLLER_PROFILE_INFO
+        | ControllersEmulationMode::Quest3Plus
+        | ControllersEmulationMode::QuestPro => CONTROLLER_PROFILE_INFO
             .get(&QUEST_CONTROLLER_PROFILE_ID)
+            .unwrap()
+            .button_set
+            .clone(),
+        ControllersEmulationMode::Pico4 => CONTROLLER_PROFILE_INFO
+            .get(&PICO4_CONTROLLER_PROFILE_ID)
+            .unwrap()
+            .button_set
+            .clone(),
+        ControllersEmulationMode::PSVR2Sense => CONTROLLER_PROFILE_INFO
+            .get(&PSVR2_CONTROLLER_PROFILE_ID)
             .unwrap()
             .button_set
             .clone(),
@@ -38,7 +45,7 @@ pub static REGISTERED_BUTTON_SET: Lazy<HashSet<u64>> = Lazy::new(|| {
             .map(|b| alvr_common::hash_string(b))
             .collect(),
     }
-});
+}
 
 pub struct BindingTarget {
     destination: u64,
@@ -147,15 +154,16 @@ fn map_button_pair_automatic(
         if let Some(destination_click) = destination.click {
             targets.push(passthrough(destination_click));
         }
-        if source.touch.is_none() {
-            if let Some(destination_touch) = destination.touch {
-                targets.push(passthrough(destination_touch));
-            }
+        if source.touch.is_none()
+            && let Some(destination_touch) = destination.touch
+        {
+            targets.push(passthrough(destination_touch));
         }
-        if source.value.is_none() {
-            if let Some(destination_value) = destination.value {
-                targets.push(binary_to_scalar(destination_value, click_to_value));
-            }
+
+        if source.value.is_none()
+            && let Some(destination_value) = destination.value
+        {
+            targets.push(binary_to_scalar(destination_value, click_to_value));
         }
 
         entries.push((source_click, targets));
@@ -172,35 +180,36 @@ fn map_button_pair_automatic(
         let mut remap_for_touch = false;
         let mut remap_for_force = false;
 
-        if source.click.is_none() {
-            if let Some(destination_click) = destination.click {
-                targets.push(hysteresis_threshold(
-                    destination_click,
-                    config.click_threshold,
-                ));
-            }
+        if source.click.is_none()
+            && let Some(destination_click) = destination.click
+        {
+            targets.push(hysteresis_threshold(
+                destination_click,
+                config.click_threshold,
+            ));
         }
-        if source.touch.is_none() {
-            if let Some(destination_touch) = destination.touch {
-                targets.push(hysteresis_threshold(
-                    destination_touch,
-                    config.touch_threshold,
-                ));
-                remap_for_touch = true;
-            }
+        if source.touch.is_none()
+            && let Some(destination_touch) = destination.touch
+        {
+            targets.push(hysteresis_threshold(
+                destination_touch,
+                config.touch_threshold,
+            ));
+            remap_for_touch = true;
         }
-        if source.force.is_none() {
-            if let Some(destination_force) = destination.force {
-                targets.push(remap(
-                    destination_force,
-                    Range {
-                        min: config.force_threshold,
-                        max: 1.0,
-                    },
-                ));
-                remap_for_force = true;
-            }
+        if source.force.is_none()
+            && let Some(destination_force) = destination.force
+        {
+            targets.push(remap(
+                destination_force,
+                Range {
+                    min: config.force_threshold,
+                    max: 1.0,
+                },
+            ));
+            remap_for_force = true;
         }
+
         if let Some(destination_value) = destination.value {
             if !remap_for_touch && !remap_for_force {
                 targets.push(passthrough(destination_value));
@@ -254,6 +263,18 @@ pub fn automatic_bindings(
             ));
         }
     }
+    if s_set.contains(&*LEFT_SYSTEM_CLICK_ID) {
+        let click = click(*LEFT_SYSTEM_CLICK_ID);
+        if d_set.contains(&*LEFT_SYSTEM_CLICK_ID) {
+            bindings.extend(map_button_pair_automatic(
+                click,
+                ct(s_set, *LEFT_SYSTEM_CLICK_ID, *LEFT_SYSTEM_TOUCH_ID),
+                config,
+            ));
+        } else if d_set.contains(&*LEFT_MENU_CLICK_ID) {
+            bindings.extend(map_button_pair_automatic(click, click, config));
+        }
+    }
     if s_set.contains(&*RIGHT_MENU_CLICK_ID) {
         let click = click(*RIGHT_MENU_CLICK_ID);
         if d_set.contains(&*RIGHT_MENU_CLICK_ID) {
@@ -264,6 +285,18 @@ pub fn automatic_bindings(
                 ct(s_set, *RIGHT_SYSTEM_CLICK_ID, *RIGHT_SYSTEM_TOUCH_ID),
                 config,
             ));
+        }
+    }
+    if s_set.contains(&*RIGHT_SYSTEM_CLICK_ID) {
+        let click = click(*RIGHT_SYSTEM_CLICK_ID);
+        if d_set.contains(&*RIGHT_SYSTEM_CLICK_ID) {
+            bindings.extend(map_button_pair_automatic(
+                click,
+                ct(s_set, *RIGHT_SYSTEM_CLICK_ID, *RIGHT_SYSTEM_TOUCH_ID),
+                config,
+            ));
+        } else if d_set.contains(&*RIGHT_MENU_CLICK_ID) {
+            bindings.extend(map_button_pair_automatic(click, click, config));
         }
     }
 
@@ -532,9 +565,14 @@ pub struct ButtonMappingManager {
 }
 
 impl ButtonMappingManager {
-    pub fn new_automatic(source: &HashSet<u64>, config: &AutomaticButtonMappingConfig) -> Self {
+    pub fn new_automatic(
+        source: &HashSet<u64>,
+        controllers_emulation_mode: &ControllersEmulationMode,
+        button_mapping_config: &AutomaticButtonMappingConfig,
+    ) -> Self {
+        let button_set = registered_button_set(controllers_emulation_mode);
         Self {
-            mappings: automatic_bindings(source, &REGISTERED_BUTTON_SET, config),
+            mappings: automatic_bindings(source, &button_set, button_mapping_config),
             binary_source_states: HashMap::new(),
             hysteresis_states: HashMap::new(),
         }
@@ -649,8 +687,7 @@ impl ButtonMappingManager {
         } else {
             let button_name = BUTTON_INFO
                 .get(&source_button.path_id)
-                .map(|info| info.path)
-                .unwrap_or("Unknown");
+                .map_or("Unknown", |info| info.path);
             info!("Received button not mapped: {button_name}");
         }
 

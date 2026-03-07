@@ -8,7 +8,6 @@
 #include "Utils.h"
 #include "ViveTrackerProxy.h"
 #include "bindings.h"
-#include <cfloat>
 
 #ifdef _WIN32
 #include "platform/win32/CEncoder.h"
@@ -18,43 +17,24 @@
 #include "platform/linux/CEncoder.h"
 #endif
 
-const vr::HmdMatrix34_t MATRIX_IDENTITY
-    = { { { 1.0, 0.0, 0.0, 0.0 }, { 0.0, 1.0, 0.0, 0.0 }, { 0.0, 0.0, 1.0, 0.0 } } };
-
-vr::HmdRect2_t fov_to_projection(FfiFov fov) {
-    auto proj_bounds = vr::HmdRect2_t {};
-    proj_bounds.vTopLeft.v[0] = tanf(fov.left);
-    proj_bounds.vBottomRight.v[0] = tanf(fov.right);
-    proj_bounds.vTopLeft.v[1] = tanf(fov.down);
-    proj_bounds.vBottomRight.v[1] = tanf(fov.up);
-
-    return proj_bounds;
-}
-
 Hmd::Hmd()
-    : TrackedDevice(HEAD_ID)
+    : TrackedDevice(
+          HEAD_ID,
+          Settings::Instance().m_TrackingRefOnly ? vr::TrackedDeviceClass_TrackingReference
+                                                 : vr::TrackedDeviceClass_HMD
+      )
     , m_baseComponentsInitialized(false)
     , m_streamComponentsInitialized(false) {
+    Debug("Hmd::constructor");
+
     auto dummy_fov = FfiFov { -1.0, 1.0, 1.0, -1.0 };
+    auto dummy_pose = FfiPose { { 0, 0, 0, 1 }, { 0, 0, 0 } };
+    auto dummy_view_params = FfiViewParams { dummy_pose, dummy_fov };
 
-    this->views_config = FfiViewsConfig {};
-    this->views_config.ipd_m = 0.063;
-    this->views_config.fov[0] = dummy_fov;
-    this->views_config.fov[1] = dummy_fov;
-
-    m_pose = vr::DriverPose_t {};
-    m_pose.poseIsValid = true;
-    m_pose.result = vr::TrackingResult_Running_OK;
-    m_pose.deviceIsConnected = true;
-    m_pose.qWorldFromDriverRotation = HmdQuaternion_Init(1, 0, 0, 0);
-    m_pose.qDriverFromHeadRotation = HmdQuaternion_Init(1, 0, 0, 0);
-    m_pose.qRotation = HmdQuaternion_Init(1, 0, 0, 0);
+    this->view_params[0] = dummy_view_params;
+    this->view_params[1] = dummy_view_params;
 
     m_poseHistory = std::make_shared<PoseHistory>();
-
-    m_deviceClass = Settings::Instance().m_TrackingRefOnly
-        ? vr::TrackedDeviceClass_TrackingReference
-        : vr::TrackedDeviceClass_HMD;
 
     if (Settings::Instance().m_enableViveTrackerProxy) {
         m_viveTrackerProxy = std::make_unique<ViveTrackerProxy>(*this);
@@ -66,12 +46,10 @@ Hmd::Hmd()
             Warn("Failed to register Vive tracker");
         }
     }
-
-    Debug("CRemoteHmd successfully initialized.\n");
 }
 
 Hmd::~Hmd() {
-    // ShutdownRuntime();
+    Debug("Hmd::destructor");
 
     if (m_encoder) {
         Debug("Hmd::~Hmd(): Stopping encoder...\n");
@@ -87,15 +65,12 @@ Hmd::~Hmd() {
 #endif
 }
 
-vr::EVRInitError Hmd::Activate(vr::TrackedDeviceIndex_t unObjectId) {
-    Debug("CRemoteHmd Activate %d\n", unObjectId);
+bool Hmd::activate() {
+    Debug("Hmd::Activate");
 
     auto vr_properties = vr::VRProperties();
 
-    this->object_id = unObjectId;
-    this->prop_container = vr_properties->TrackedDeviceToPropertyContainer(this->object_id);
-
-    SetOpenvrProps(this->device_id);
+    SetOpenvrProps((void*)this, this->device_id);
 
     vr_properties->SetFloatProperty(
         this->prop_container,
@@ -133,7 +108,7 @@ vr::EVRInitError Hmd::Activate(vr::TrackedDeviceIndex_t unObjectId) {
     if (!m_baseComponentsInitialized) {
         m_baseComponentsInitialized = true;
 
-        if (IsHMD()) {
+        if (this->device_class == vr::TrackedDeviceClass_HMD) {
 #ifdef _WIN32
             m_D3DRender = std::make_shared<CD3DRender>();
 
@@ -150,13 +125,13 @@ vr::EVRInitError Hmd::Activate(vr::TrackedDeviceIndex_t unObjectId) {
                     "graphics cards.\n",
                     Settings::Instance().m_nAdapterIndex
                 );
-                return vr::VRInitError_Driver_Failed;
+                return false;
             }
 
             int32_t nDisplayAdapterIndex;
             if (!m_D3DRender->GetAdapterInfo(&nDisplayAdapterIndex, m_adapterName)) {
                 Error("Failed to get primary adapter info!\n");
-                return vr::VRInitError_Driver_Failed;
+                return false;
             }
 
             Info("Using %ls as primary graphics adapter.\n", m_adapterName.c_str());
@@ -167,10 +142,10 @@ vr::EVRInitError Hmd::Activate(vr::TrackedDeviceIndex_t unObjectId) {
 #endif
         }
 
-        DriverReadyIdle(IsHMD());
+        DriverReadyIdle(this->device_class == vr::TrackedDeviceClass_HMD);
     }
 
-    if (IsHMD()) {
+    if (this->device_class == vr::TrackedDeviceClass_HMD) {
         vr::VREvent_Data_t eventData;
         eventData.ipd = { 0.063 };
         vr::VRServerDriverHost()->VendorSpecificEvent(
@@ -178,15 +153,12 @@ vr::EVRInitError Hmd::Activate(vr::TrackedDeviceIndex_t unObjectId) {
         );
     }
 
-    return vr::VRInitError_None;
+    return true;
 }
 
-void Hmd::Deactivate() {
-    this->object_id = vr::k_unTrackedDeviceIndexInvalid;
-    this->prop_container = vr::k_ulInvalidPropertyContainer;
-}
+void* Hmd::get_component(const char* component_name_and_version) {
+    Debug("Hmd::GetComponent %s", component_name_and_version);
 
-void* Hmd::GetComponent(const char* component_name_and_version) {
     // NB: "this" pointer needs to be statically cast to point to the correct vtable
 
     auto name_and_vers = std::string(component_name_and_version);
@@ -203,9 +175,9 @@ void* Hmd::GetComponent(const char* component_name_and_version) {
     return nullptr;
 }
 
-vr::DriverPose_t Hmd::GetPose() { return m_pose; }
-
 void Hmd::OnPoseUpdated(uint64_t targetTimestampNs, FfiDeviceMotion motion) {
+    Debug("Hmd::OnPoseUpdated");
+
     if (this->object_id == vr::k_unTrackedDeviceIndexInvalid) {
         return;
     }
@@ -218,20 +190,19 @@ void Hmd::OnPoseUpdated(uint64_t targetTimestampNs, FfiDeviceMotion motion) {
     pose.qDriverFromHeadRotation = HmdQuaternion_Init(1, 0, 0, 0);
 
     pose.qRotation = HmdQuaternion_Init(
-        motion.orientation.w, motion.orientation.x, motion.orientation.y, motion.orientation.z
+        motion.pose.orientation.w,
+        motion.pose.orientation.x,
+        motion.pose.orientation.y,
+        motion.pose.orientation.z
     );
 
-    pose.vecPosition[0] = motion.position[0];
-    pose.vecPosition[1] = motion.position[1];
-    pose.vecPosition[2] = motion.position[2];
+    pose.vecPosition[0] = motion.pose.position[0];
+    pose.vecPosition[1] = motion.pose.position[1];
+    pose.vecPosition[2] = motion.pose.position[2];
 
-    m_pose = pose;
+    this->submit_pose(pose);
 
     m_poseHistory->OnPoseUpdated(targetTimestampNs, motion);
-
-    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(
-        this->object_id, pose, sizeof(vr::DriverPose_t)
-    );
 
     if (m_viveTrackerProxy)
         m_viveTrackerProxy->update();
@@ -251,6 +222,8 @@ void Hmd::OnPoseUpdated(uint64_t targetTimestampNs, FfiDeviceMotion motion) {
 }
 
 void Hmd::StartStreaming() {
+    Debug("Hmd::StartStreaming");
+
     vr::VRDriverInput()->UpdateBooleanComponent(m_proximity, true, 0.0);
 
     if (m_streamComponentsInitialized) {
@@ -258,7 +231,7 @@ void Hmd::StartStreaming() {
     }
 
     // Spin up a separate thread to handle the overlapped encoding/transmit step.
-    if (IsHMD()) {
+    if (this->device_class == vr::TrackedDeviceClass_HMD) {
 #ifdef _WIN32
         m_encoder = std::make_shared<CEncoder>();
         try {
@@ -288,21 +261,34 @@ void Hmd::StartStreaming() {
     m_streamComponentsInitialized = true;
 }
 
-void Hmd::StopStreaming() { vr::VRDriverInput()->UpdateBooleanComponent(m_proximity, false, 0.0); }
+void Hmd::StopStreaming() {
+    Debug("Hmd::StopStreaming");
 
-void Hmd::SetViewsConfig(FfiViewsConfig config) {
-    this->views_config = config;
+    vr::VRDriverInput()->UpdateBooleanComponent(m_proximity, false, 0.0);
+}
 
-    auto left_transform = MATRIX_IDENTITY;
-    left_transform.m[0][3] = -config.ipd_m / 2.0;
-    auto right_transform = MATRIX_IDENTITY;
-    right_transform.m[0][3] = config.ipd_m / 2.0;
+void Hmd::SetViewParams(const FfiViewParams params[2]) {
+    Debug("Hmd::SetViewParams");
+
+    this->view_params[0] = params[0];
+    this->view_params[1] = params[1];
+
+    // The OpenXR spec defines the HMD position as the midpoint
+    // between the eyes, so conversion to this is handled by the
+    // client.
+    auto left_transform = pose_to_mat(params[0].pose);
+    auto right_transform = pose_to_mat(params[1].pose);
     vr::VRServerDriverHost()->SetDisplayEyeToHead(object_id, left_transform, right_transform);
 
-    auto left_proj = fov_to_projection(config.fov[0]);
-    auto right_proj = fov_to_projection(config.fov[1]);
-
+    auto left_proj = fov_to_tangents(params[0].fov);
+    auto right_proj = fov_to_tangents(params[1].fov);
     vr::VRServerDriverHost()->SetDisplayProjectionRaw(object_id, left_proj, right_proj);
+
+#ifdef _WIN32
+    if (m_encoder) {
+        m_encoder->SetViewParams(left_proj, left_transform, right_proj, right_transform);
+    }
+#endif
 
     // todo: check if this is still needed
     vr::VRServerDriverHost()->VendorSpecificEvent(
@@ -310,14 +296,19 @@ void Hmd::SetViewsConfig(FfiViewsConfig config) {
     );
 }
 
+void Hmd::SetProximityState(bool headsetIsWorn) {
+    vr::VRDriverInput()->UpdateBooleanComponent(m_proximity, headsetIsWorn, 0.0);
+}
+
 void Hmd::GetWindowBounds(int32_t* pnX, int32_t* pnY, uint32_t* pnWidth, uint32_t* pnHeight) {
     Debug(
-        "GetWindowBounds %dx%d - %dx%d\n",
+        "Hmd::GetWindowBounds %dx%d - %dx%d\n",
         0,
         0,
         Settings::Instance().m_renderWidth,
         Settings::Instance().m_renderHeight
     );
+
     *pnX = 0;
     *pnY = 0;
     *pnWidth = Settings::Instance().m_renderWidth;
@@ -335,7 +326,7 @@ bool Hmd::IsDisplayRealDisplay() {
 void Hmd::GetRecommendedRenderTargetSize(uint32_t* pnWidth, uint32_t* pnHeight) {
     *pnWidth = Settings::Instance().m_recommendedTargetWidth / 2;
     *pnHeight = Settings::Instance().m_recommendedTargetHeight;
-    Debug("GetRecommendedRenderTargetSize %dx%d\n", *pnWidth, *pnHeight);
+    Debug("Hmd::GetRecommendedRenderTargetSize %dx%d\n", *pnWidth, *pnHeight);
 }
 
 void Hmd::GetEyeOutputViewport(
@@ -350,15 +341,18 @@ void Hmd::GetEyeOutputViewport(
     } else {
         *pnX = Settings::Instance().m_renderWidth / 2;
     }
-    Debug("GetEyeOutputViewport Eye=%d %dx%d %dx%d\n", eEye, *pnX, *pnY, *pnWidth, *pnHeight);
+
+    Debug("Hmd::GetEyeOutputViewport Eye=%d %dx%d %dx%d\n", eEye, *pnX, *pnY, *pnWidth, *pnHeight);
 }
 
 void Hmd::GetProjectionRaw(vr::EVREye eye, float* left, float* right, float* top, float* bottom) {
-    auto proj = fov_to_projection(this->views_config.fov[eye]);
+    auto proj = fov_to_tangents(this->view_params[eye].fov);
     *left = proj.vTopLeft.v[0];
     *right = proj.vBottomRight.v[0];
     *top = proj.vTopLeft.v[1];
     *bottom = proj.vBottomRight.v[1];
+
+    Debug("Hmd::GetProjectionRaw Eye=%d %f %f %f %f\n", eye, *left, *right, *top, *bottom);
 }
 
 vr::DistortionCoordinates_t Hmd::ComputeDistortion(vr::EVREye, float u, float v) {

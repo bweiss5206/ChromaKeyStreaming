@@ -1,5 +1,21 @@
 #include "TrackedDevice.h"
 #include "Logger.h"
+#include "Utils.h"
+#include <chrono>
+#include <thread>
+
+TrackedDevice::TrackedDevice(uint64_t device_id, vr::ETrackedDeviceClass device_class)
+    : device_id(device_id)
+    , device_class(device_class) {
+    this->last_pose = vr::DriverPose_t {};
+    this->last_pose.poseIsValid = false;
+    this->last_pose.deviceIsConnected = false;
+    this->last_pose.result = vr::TrackingResult_Uninitialized;
+
+    this->last_pose.qDriverFromHeadRotation = HmdQuaternion_Init(1, 0, 0, 0);
+    this->last_pose.qWorldFromDriverRotation = HmdQuaternion_Init(1, 0, 0, 0);
+    this->last_pose.qRotation = HmdQuaternion_Init(1, 0, 0, 0);
+}
 
 std::string TrackedDevice::get_serial_number() {
     auto size = GetSerialNumber(this->device_id, nullptr);
@@ -58,4 +74,53 @@ void TrackedDevice::set_prop(FfiOpenvrProperty prop) {
     vr::VRServerDriverHost()->VendorSpecificEvent(
         this->object_id, vr::VREvent_PropertyChanged, event_data, 0.
     );
+}
+
+void TrackedDevice::submit_pose(vr::DriverPose_t pose) {
+    this->last_pose = pose;
+    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(
+        this->object_id, pose, sizeof(vr::DriverPose_t)
+    );
+}
+
+bool TrackedDevice::register_device(bool await_activation) {
+    if (!vr::VRServerDriverHost()->TrackedDeviceAdded(
+            this->get_serial_number().c_str(),
+            this->device_class,
+            (vr::ITrackedDeviceServerDriver*)this
+        )) {
+        Error("Failed to register device (%s)", this->get_serial_number().c_str());
+
+        return false;
+    }
+
+    if (await_activation) {
+        auto lock = std::unique_lock<std::mutex>(this->activation_mutex);
+        this->activation_condvar.wait_for(lock, std::chrono::seconds(1), [this] {
+            return this->activation_state != ActivationState::Pending;
+        });
+
+        return this->activation_state == ActivationState::Success;
+    } else {
+        return true;
+    }
+}
+
+vr::EVRInitError TrackedDevice::Activate(vr::TrackedDeviceIndex_t object_id) {
+    this->object_id = object_id;
+    this->prop_container = vr::VRProperties()->TrackedDeviceToPropertyContainer(this->object_id);
+
+    {
+        auto guard = std::lock_guard<std::mutex>(this->activation_mutex);
+
+        if (this->activate()) {
+            this->activation_state = ActivationState::Success;
+        } else {
+            this->activation_state = ActivationState::Failure;
+        }
+    }
+    this->activation_condvar.notify_one();
+
+    return this->activation_state == ActivationState::Success ? vr::VRInitError_None
+                                                              : vr::VRInitError_Driver_Failed;
 }

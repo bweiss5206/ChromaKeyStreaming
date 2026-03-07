@@ -1,5 +1,4 @@
-use crate::platform;
-use alvr_common::anyhow::{bail, Result};
+use alvr_common::anyhow::{Result, bail};
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 
 pub struct AnnouncerSocket {
@@ -18,7 +17,7 @@ impl AnnouncerSocket {
     }
 
     pub fn announce(&self) -> Result<()> {
-        let local_ip = platform::local_ip();
+        let local_ip = alvr_system_info::local_ip();
         if local_ip.is_unspecified() {
             bail!("IP is unspecified");
         }

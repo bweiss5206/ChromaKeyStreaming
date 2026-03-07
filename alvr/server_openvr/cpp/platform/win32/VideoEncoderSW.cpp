@@ -18,11 +18,11 @@ VideoEncoderSW::VideoEncoderSW(std::shared_ptr<CD3DRender> d3dRender, int width,
     , m_renderWidth(width)
     , m_renderHeight(height)
     , m_bitrateInMBits(30) {
-#ifdef ALVR_DEBUG_LOG
-    av_log_set_level(AV_LOG_DEBUG);
-    av_log_set_callback(LibVALog);
-    Debug("Set FFMPEG/LibAV to debug logging");
-#endif
+    // #ifdef ALVR_DEBUG_LOG
+    //     av_log_set_level(AV_LOG_DEBUG);
+    //     av_log_set_callback(LibVALog);
+    //     Debug("Set FFMPEG/LibAV to debug logging");
+    // #endif
 }
 
 VideoEncoderSW::~VideoEncoderSW() { }
@@ -87,8 +87,7 @@ void VideoEncoderSW::Initialize() {
     m_codecContext->sample_aspect_ratio = AVRational { 1, 1 };
     m_codecContext->pix_fmt
         = settings.m_use10bitEncoder ? AV_PIX_FMT_YUV420P10 : AV_PIX_FMT_YUV420P;
-    m_codecContext->color_range
-        = settings.m_useFullRangeEncoding ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+    m_codecContext->color_range = AVCOL_RANGE_JPEG;
     if (settings.m_enableHdr) {
         m_codecContext->color_primaries = AVCOL_PRI_BT2020;
         m_codecContext->color_trc = AVCOL_TRC_GAMMA22;

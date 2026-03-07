@@ -1,23 +1,13 @@
-use std::collections::{HashMap, HashSet};
-
 use super::schema::{HigherOrderChoiceSchema, PresetModifierOperation};
-use crate::dashboard::components::{self, NestingInfo, SettingControl, INDENTATION_STEP};
-use alvr_gui_common::theme::{
-    log_colors::{INFO_LIGHT, WARNING_LIGHT},
-    OK_GREEN,
-};
+use crate::dashboard::components::{self, NestingInfo, SettingControl};
 use alvr_packets::{PathSegment, PathValuePair};
-use eframe::egui::{self, popup, Ui};
+use eframe::egui::Ui;
 use serde_json as json;
 use settings_schema::{SchemaEntry, SchemaNode};
-
-const POPUP_ID: &str = "setpopup";
+use std::collections::{HashMap, HashSet};
 
 pub struct Control {
     name: String,
-    help: Option<String>,
-    steamvr_restart_flag: bool,
-    real_time_flag: bool,
     modifiers: HashMap<String, Vec<PathValuePair>>,
     control: SettingControl,
     preset_json: json::Value,
@@ -25,12 +15,6 @@ pub struct Control {
 
 impl Control {
     pub fn new(schema: HigherOrderChoiceSchema) -> Self {
-        let name = components::get_display_name(&schema.name, &schema.strings);
-        let help = schema.strings.get("help").cloned();
-        // let notice = entry.strings.get("notice").cloned();
-        let steamvr_restart_flag = schema.flags.contains("steamvr-restart");
-        let real_time_flag = schema.flags.contains("real-time");
-
         let modifiers = schema
             .options
             .iter()
@@ -51,23 +35,38 @@ impl Control {
             })
             .collect();
 
-        let control_schema = SchemaNode::Choice {
-            default: schema.options[schema.default_option_index]
-                .display_name
-                .clone(),
-            variants: schema
-                .options
-                .into_iter()
-                .map(|option| SchemaEntry {
-                    name: option.display_name.clone(),
-                    strings: [("display_name".into(), option.display_name)]
+        let mut strings = schema.strings;
+        strings.insert("display_name".into(), schema.name.clone());
+
+        let control_schema = SchemaNode::Section {
+            entries: vec![SchemaEntry {
+                name: schema.name.clone(),
+                strings,
+                flags: schema.flags,
+                content: SchemaNode::Choice {
+                    default: schema
+                        .options
+                        .iter()
+                        .find(|option| option.display_name == schema.default_option_display_name)
+                        .unwrap()
+                        .display_name
+                        .clone(),
+                    variants: schema
+                        .options
                         .into_iter()
+                        .map(|option| SchemaEntry {
+                            name: option.display_name.clone(),
+                            strings: [("display_name".into(), option.display_name)]
+                                .into_iter()
+                                .collect(),
+                            flags: HashSet::new(),
+                            content: None,
+                        })
                         .collect(),
-                    flags: HashSet::new(),
-                    content: None,
-                })
-                .collect(),
-            gui: Some(schema.gui),
+                    gui: Some(schema.gui),
+                },
+            }],
+            gui_collapsible: false,
         };
 
         let control = SettingControl::new(
@@ -78,15 +77,10 @@ impl Control {
             control_schema,
         );
 
-        let preset_json = json::json!({
-            "variant": ""
-        });
+        let preset_json = json::json!({ {&schema.name}: { "variant": "" } });
 
         Self {
-            name,
-            help,
-            steamvr_restart_flag,
-            real_time_flag,
+            name: schema.name,
             modifiers,
             control,
             preset_json,
@@ -120,7 +114,7 @@ impl Control {
                     };
                 }
 
-                if *session_ref != desc.value {
+                if !components::json_values_eq(session_ref, &desc.value) {
                     continue 'outer;
                 }
             }
@@ -132,54 +126,11 @@ impl Control {
         }
 
         // Note: if no modifier matched, the control will unselect all options
-        self.preset_json["variant"] = json::Value::String(selected_option);
+        self.preset_json[&self.name]["variant"] = json::Value::String(selected_option);
     }
 
     pub fn ui(&mut self, ui: &mut Ui) -> Vec<PathValuePair> {
-        let mut response = None;
-
-        ui.horizontal(|ui| {
-            ui.add_space(INDENTATION_STEP);
-            ui.label(&self.name);
-
-            if let Some(string) = &self.help {
-                if ui.colored_label(INFO_LIGHT, "❓").hovered() {
-                    popup::show_tooltip_text(
-                        ui.ctx(),
-                        ui.layer_id(),
-                        egui::Id::new(POPUP_ID),
-                        string,
-                    );
-                }
-            }
-            if self.steamvr_restart_flag && ui.colored_label(WARNING_LIGHT, "⚠").hovered() {
-                popup::show_tooltip_text(
-                    ui.ctx(),
-                    ui.layer_id(),
-                    egui::Id::new(POPUP_ID),
-                    format!(
-                        "Changing this setting will make SteamVR restart!\n{}",
-                        "Please save your in-game progress first"
-                    ),
-                );
-            }
-
-            // The emoji is blue but it will be green in the UI
-            if self.real_time_flag && ui.colored_label(OK_GREEN, "🔵").hovered() {
-                popup::show_tooltip_text(
-                    ui.ctx(),
-                    ui.layer_id(),
-                    egui::Id::new(POPUP_ID),
-                    "This setting can be changed in real-time during streaming!",
-                );
-            }
-        });
-        response = self
-            .control
-            .ui(ui, &mut self.preset_json, true)
-            .or(response);
-
-        if let Some(desc) = response {
+        if let Some(desc) = self.control.ui(ui, &mut self.preset_json, false) {
             // todo: handle children requests
             self.modifiers[desc.value.as_str().unwrap()].clone()
         } else {

@@ -20,11 +20,24 @@ Launcher will allow you to manage old, current and new installations of ALVR str
 
 For any problem visit the [Troubleshooting page](https://github.com/alvr-org/ALVR/wiki/Troubleshooting).
 
-### Windows microphone streaming
+## Microphone Setup on Windows
 
-To use the microphone you need to install the [VB-CABLE driver](https://vb-audio.com/Cable/).
-Set "CABLE Output" as the default microphone.
-Then you can enable the microphone in the ALVR setting, leave "Virtual microphone input" to Default.
+To use your microphone in ALVR on Windows you need to install **Virtual Audio Cable** (or equivalent software). However if Virtual Audio Cable is already installed but not working with ALVR **or if you encounter any issues**, it's worth following these steps to reinstall and configure it properly.
+
+### **1. Install or Reinstall Virtual Audio Cable**
+1. **Download** the latest Lite version of [Virtual Audio Cable](https://software.muzychenko.net/freeware/vac470lite.zip).
+2. **Extract** the ZIP archive.
+3. Open the extracted folder and run **"setup64.exe"** as administrator.
+
+### **2. Configure Windows Sound Settings**
+1. **Open** Windows Sound Settings (`Win + I` → "Sound").
+2. **Under Output Devices**:
+   - **Do not set any "Virtual Audio Cable" as the default output**, or you’ll hear yourself. Select your headphone or whatever you're using.
+
+### **3. Configure ALVR**
+1. **Open ALVR** and go to **Settings**.
+2. Set **Headset Speaker** → **System Default**.
+3. Set **Headset Microphone** → **Automatic** or **Virtual Audio Cable**.
 
 ## Advanced installation
 
@@ -65,7 +78,7 @@ Since nightly releases can be unstable, always use matching versions for PC and 
 
 ### Flatpak
 
-For Flatpak users, refer to the instructions [here](https://github.com/alvr-org/ALVR/wiki/Flatpak)
+For Flatpak users, refer to the instructions [here](https://github.com/alvr-org/ALVR/wiki/Installing-ALVR-and-using-SteamVR-on-Linux-through-Flatpak)
 
 ## Advanced usage
 
@@ -83,4 +96,4 @@ Open ALVR, go to the `Installation` tab and click on `Register ALVR driver`.
 
 ### Connect headset to PC via a USB Cable
 
-Check out the guide [here](https://github.com/alvr-org/ALVR/wiki/Using-ALVR-through-a-USB-connection).
+Check out the guide [here](https://github.com/alvr-org/ALVR/wiki/ALVR-wired-setup-(ALVR-over-USB)).

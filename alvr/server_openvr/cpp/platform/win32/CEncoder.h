@@ -7,6 +7,7 @@
 #include "VideoEncoder.h"
 #include "VideoEncoderAMF.h"
 #include "VideoEncoderNVENC.h"
+#include "VideoEncoderVPL.h"
 #include "alvr_server/Utils.h"
 #include <d3d11.h>
 #include <d3d11_1.h>
@@ -33,9 +34,17 @@ public:
 
     void Initialize(std::shared_ptr<CD3DRender> d3dRender);
 
+    void SetViewParams(
+        vr::HmdRect2_t projLeft,
+        vr::HmdMatrix34_t eyeToHeadLeft,
+        vr::HmdRect2_t projRight,
+        vr::HmdMatrix34_t eyeToHeadRight
+    );
+
     bool CopyToStaging(
         ID3D11Texture2D* pTexture[][2],
         vr::VRTextureBounds_t bounds[][2],
+        vr::HmdMatrix34_t poses[],
         int layerCount,
         bool recentering,
         uint64_t presentationTime,
@@ -53,8 +62,6 @@ public:
     void WaitForEncode();
 
     void OnStreamStart();
-
-    void OnPacketLoss();
 
     void InsertIDR();
 

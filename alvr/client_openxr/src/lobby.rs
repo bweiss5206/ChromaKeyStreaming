@@ -1,17 +1,18 @@
 use crate::{
-    graphics::{self, CompositionLayerBuilder},
+    graphics::{self, ProjectionLayerAlphaConfig, ProjectionLayerBuilder},
     interaction::{self, InteractionContext},
-    XrContext,
 };
-use alvr_client_core::graphics::{GraphicsContext, LobbyRenderer, RenderViewInput};
-use alvr_common::glam::{UVec2, Vec3};
+use alvr_common::{Pose, ViewParams, glam::UVec2, parking_lot::RwLock};
+use alvr_graphics::{GraphicsContext, LobbyRenderer, LobbyViewParams, SDR_FORMAT_GL};
+use alvr_system_info::Platform;
 use openxr as xr;
-use std::{rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 // todo: add interaction?
 pub struct Lobby {
     xr_session: xr::Session<xr::OpenGlEs>,
-    interaction_ctx: Arc<InteractionContext>,
+    interaction_ctx: Arc<RwLock<InteractionContext>>,
+    platform: Platform,
     reference_space: xr::Space,
     swapchains: [xr::Swapchain<xr::OpenGlEs>; 2],
     view_resolution: UVec2,
@@ -21,13 +22,14 @@ pub struct Lobby {
 
 impl Lobby {
     pub fn new(
-        xr_ctx: &XrContext,
+        xr_session: xr::Session<xr::OpenGlEs>,
         gfx_ctx: Rc<GraphicsContext>,
-        interaction_ctx: Arc<InteractionContext>,
+        interaction_ctx: Arc<RwLock<InteractionContext>>,
+        platform: Platform,
         view_resolution: UVec2,
         initial_hud_message: &str,
     ) -> Self {
-        let reference_space_type = if xr_ctx.instance.exts().ext_local_floor.is_some() {
+        let reference_space_type = if xr_session.instance().exts().ext_local_floor.is_some() {
             xr::ReferenceSpaceType::LOCAL_FLOOR_EXT
         } else {
             // The Quest 1 doesn't support LOCAL_FLOOR_EXT, recentering is required for AppLab, but
@@ -35,12 +37,11 @@ impl Lobby {
             xr::ReferenceSpaceType::STAGE
         };
 
-        let reference_space =
-            interaction::get_reference_space(&xr_ctx.session, reference_space_type);
+        let reference_space = interaction::get_reference_space(&xr_session, reference_space_type);
 
         let swapchains = [
-            graphics::create_swapchain(&xr_ctx.session, view_resolution, None, false),
-            graphics::create_swapchain(&xr_ctx.session, view_resolution, None, false),
+            graphics::create_swapchain(&xr_session, &gfx_ctx, view_resolution, SDR_FORMAT_GL, None),
+            graphics::create_swapchain(&xr_session, &gfx_ctx, view_resolution, SDR_FORMAT_GL, None),
         ];
 
         let renderer = LobbyRenderer::new(
@@ -64,8 +65,9 @@ impl Lobby {
         );
 
         Self {
-            xr_session: xr_ctx.session.clone(),
+            xr_session,
             interaction_ctx,
+            platform,
             reference_space,
             swapchains,
             view_resolution,
@@ -79,16 +81,18 @@ impl Lobby {
             interaction::get_reference_space(&self.xr_session, self.reference_space_type);
     }
 
-    pub fn update_hud_message(&mut self, message: &str) {
+    pub fn update_hud_message(&self, message: &str) {
         self.renderer.update_hud_message(message);
     }
 
-    pub fn render(&mut self, predicted_display_time: xr::Time) -> CompositionLayerBuilder {
+    pub fn render(&mut self, vsync_time: Duration) -> ProjectionLayerBuilder<'_> {
+        let xr_vsync_time = crate::to_xr_time(vsync_time);
+
         let (flags, maybe_views) = self
             .xr_session
             .locate_views(
                 xr::ViewConfigurationType::PRIMARY_STEREO,
-                predicted_display_time,
+                xr_vsync_time,
                 &self.reference_space,
             )
             .unwrap();
@@ -100,22 +104,52 @@ impl Lobby {
         };
 
         self.xr_session
-            .sync_actions(&[(&self.interaction_ctx.action_set).into()])
+            .sync_actions(&[(&self.interaction_ctx.read().action_set).into()])
             .ok();
+
+        // future_time doesn't have to be any particular value, just something after vsync_time
+        let future_time = vsync_time + Duration::from_millis(80);
         let left_hand_data = interaction::get_hand_data(
             &self.xr_session,
+            self.platform,
             &self.reference_space,
-            predicted_display_time,
-            &self.interaction_ctx.hands_interaction[0],
-            &mut Vec3::new(0.0, 0.0, 0.0),
+            vsync_time,
+            future_time,
+            &self.interaction_ctx.read().hands_interaction[0],
+            &mut Pose::default(),
+            &mut Pose::default(),
         );
         let right_hand_data = interaction::get_hand_data(
             &self.xr_session,
+            self.platform,
             &self.reference_space,
-            predicted_display_time,
-            &self.interaction_ctx.hands_interaction[1],
-            &mut Vec3::new(0.0, 0.0, 0.0),
+            vsync_time,
+            future_time,
+            &self.interaction_ctx.read().hands_interaction[1],
+            &mut Pose::default(),
+            &mut Pose::default(),
         );
+
+        let additional_motions = self
+            .interaction_ctx
+            .read()
+            .body_source
+            .as_ref()
+            .map(|source| {
+                interaction::get_bd_motion_trackers(source, vsync_time)
+                    .iter()
+                    .map(|(_, motion)| *motion)
+                    .collect()
+            });
+
+        let body_skeleton = self
+            .interaction_ctx
+            .read()
+            .body_source
+            .as_ref()
+            .and_then(|source| {
+                interaction::get_body_skeleton(source, &self.reference_space, vsync_time)
+            });
 
         let left_swapchain_idx = self.swapchains[0].acquire_image().unwrap();
         let right_swapchain_idx = self.swapchains[1].acquire_image().unwrap();
@@ -129,21 +163,26 @@ impl Lobby {
 
         self.renderer.render(
             [
-                RenderViewInput {
-                    pose: crate::from_xr_pose(views[0].pose),
-                    fov: crate::from_xr_fov(views[0].fov),
+                LobbyViewParams {
+                    view_params: ViewParams {
+                        pose: crate::from_xr_pose(views[0].pose),
+                        fov: crate::from_xr_fov(views[0].fov),
+                    },
                     swapchain_index: left_swapchain_idx,
                 },
-                RenderViewInput {
-                    pose: crate::from_xr_pose(views[1].pose),
-                    fov: crate::from_xr_fov(views[1].fov),
+                LobbyViewParams {
+                    view_params: ViewParams {
+                        pose: crate::from_xr_pose(views[1].pose),
+                        fov: crate::from_xr_fov(views[1].fov),
+                    },
                     swapchain_index: right_swapchain_idx,
                 },
             ],
-            [
-                (left_hand_data.0.map(|dm| dm.pose), left_hand_data.1),
-                (right_hand_data.0.map(|dm| dm.pose), right_hand_data.1),
-            ],
+            [left_hand_data, right_hand_data],
+            body_skeleton,
+            additional_motions,
+            false,
+            cfg!(debug_assertions),
         );
 
         self.swapchains[0].release_image().unwrap();
@@ -157,7 +196,7 @@ impl Lobby {
             },
         };
 
-        CompositionLayerBuilder::new(
+        ProjectionLayerBuilder::new(
             &self.reference_space,
             [
                 xr::CompositionLayerProjectionView::new()
@@ -179,6 +218,10 @@ impl Lobby {
                             .image_rect(rect),
                     ),
             ],
+            Some(ProjectionLayerAlphaConfig {
+                premultiplied: true,
+            }),
+            None,
         )
     }
 }

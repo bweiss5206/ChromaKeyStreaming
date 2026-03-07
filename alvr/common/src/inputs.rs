@@ -1,14 +1,16 @@
 use crate::hash_string;
-use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 macro_rules! interaction_profile {
     ($ty:ident, $path:expr) => {
         paste::paste! {
             pub const [<$ty _CONTROLLER_PROFILE_PATH>]: &str =
                 concat!("/interaction_profiles/", $path, "_controller");
-            pub static [<$ty _CONTROLLER_PROFILE_ID>]: Lazy<u64> =
-                Lazy::new(|| hash_string([<$ty _CONTROLLER_PROFILE_PATH>]));
+            pub static [<$ty _CONTROLLER_PROFILE_ID>]: LazyLock<u64> =
+                LazyLock::new(|| hash_string([<$ty _CONTROLLER_PROFILE_PATH>]));
         }
     };
 }
@@ -18,6 +20,9 @@ interaction_profile!(VIVE, "htc/vive");
 interaction_profile!(INDEX, "valve/index");
 interaction_profile!(PICO_NEO3, "bytedance/pico_neo3");
 interaction_profile!(PICO4, "bytedance/pico4");
+interaction_profile!(PICO4S, "bytedance/pico4s");
+interaction_profile!(PICO_G3, "bytedance/pico_g3");
+interaction_profile!(PSVR2, "sony/playstation_vr2_sense");
 interaction_profile!(FOCUS3, "htc/vive_focus3");
 interaction_profile!(YVR, "yvr/touch");
 
@@ -26,10 +31,10 @@ macro_rules! devices {
         paste::paste! {
             $(
                 pub const [<$name _PATH>]: &str = $path;
-                pub static [<$name _ID>]: Lazy<u64> = Lazy::new(|| hash_string([<$name _PATH>]));
+                pub static [<$name _ID>]: LazyLock<u64> = LazyLock::new(|| hash_string([<$name _PATH>]));
             )*
 
-            pub static DEVICE_ID_TO_PATH: Lazy<HashMap<u64, &str>> = Lazy::new(|| {
+            pub static DEVICE_ID_TO_PATH: LazyLock<HashMap<u64, &str>> = LazyLock::new(|| {
                 [
                     $((*[<$name _ID>], [<$name _PATH>]),)*
                 ]
@@ -44,6 +49,8 @@ devices! {
     (HEAD, "/user/head"),
     (HAND_LEFT, "/user/hand/left"),
     (HAND_RIGHT, "/user/hand/right"),
+    (HAND_TRACKER_LEFT,"/user/hand_tracker/left"),
+    (HAND_TRACKER_RIGHT, "/user/hand_tracker/right"),
     (BODY_CHEST, "/user/body/chest"),
     (BODY_HIPS, "/user/body/waist"),
     (BODY_LEFT_ELBOW, "/user/body/left_elbow"),
@@ -52,6 +59,11 @@ devices! {
     (BODY_LEFT_FOOT, "/user/body/left_foot"),
     (BODY_RIGHT_KNEE, "/user/body/right_knee"),
     (BODY_RIGHT_FOOT, "/user/body/right_foot"),
+    (DETACHED_CONTROLLER_LEFT, "/user/detached_controller_meta/left"),
+    (DETACHED_CONTROLLER_RIGHT, "/user/detached_controller_meta/right"),
+    (GENERIC_TRACKER_1, "/user/generic_tracker/1"),
+    (GENERIC_TRACKER_2, "/user/generic_tracker/2"),
+    (GENERIC_TRACKER_3, "/user/generic_tracker/3"),
 }
 
 pub enum ButtonType {
@@ -71,15 +83,15 @@ macro_rules! controller_inputs {
             $(
                 pub const [<LEFT_ $inputs _PATH>]: &str =
                     concat!("/user/hand/left/input/", $paths);
-                pub static [<LEFT_ $inputs _ID>]: Lazy<u64> =
-                    Lazy::new(|| hash_string([<LEFT_ $inputs _PATH>]));
+                pub static [<LEFT_ $inputs _ID>]: LazyLock<u64> =
+                    LazyLock::new(|| hash_string([<LEFT_ $inputs _PATH>]));
                 pub const [<RIGHT_ $inputs _PATH>]: &str =
                     concat!("/user/hand/right/input/", $paths);
-                pub static [<RIGHT_ $inputs _ID>]: Lazy<u64> =
-                    Lazy::new(|| hash_string([<RIGHT_ $inputs _PATH>]));
+                pub static [<RIGHT_ $inputs _ID>]: LazyLock<u64> =
+                    LazyLock::new(|| hash_string([<RIGHT_ $inputs _PATH>]));
             )*
 
-            pub static BUTTON_INFO: Lazy<HashMap<u64, ButtonInfo>> = Lazy::new(|| {
+            pub static BUTTON_INFO: LazyLock<HashMap<u64, ButtonInfo>> = LazyLock::new(|| {
                 [
                     $((
                         *[<LEFT_ $inputs _ID>],
@@ -109,6 +121,7 @@ controller_inputs! {
     (SYSTEM_CLICK, "system/click", Binary),
     (SYSTEM_TOUCH, "system/touch", Binary),
     (MENU_CLICK, "menu/click", Binary),
+    (MENU_TOUCH, "menu/touch", Binary),
     (BACK_CLICK, "back/click", Binary),
     (A_CLICK, "a/click", Binary),
     (A_TOUCH, "a/touch", Binary),
@@ -142,274 +155,390 @@ pub struct InteractionProfileInfo {
     pub button_set: HashSet<u64>,
 }
 
-pub static CONTROLLER_PROFILE_INFO: Lazy<HashMap<u64, InteractionProfileInfo>> = Lazy::new(|| {
-    [
-        (
-            *QUEST_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: QUEST_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_X_CLICK_ID,
-                    *LEFT_X_TOUCH_ID,
-                    *LEFT_Y_CLICK_ID,
-                    *LEFT_Y_TOUCH_ID,
-                    *LEFT_MENU_CLICK_ID,
-                    *LEFT_SQUEEZE_VALUE_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_TRIGGER_TOUCH_ID,
-                    *LEFT_THUMBSTICK_X_ID,
-                    *LEFT_THUMBSTICK_Y_ID,
-                    *LEFT_THUMBSTICK_CLICK_ID,
-                    *LEFT_THUMBSTICK_TOUCH_ID,
-                    *LEFT_THUMBREST_TOUCH_ID,
-                    *RIGHT_A_CLICK_ID,
-                    *RIGHT_A_TOUCH_ID,
-                    *RIGHT_B_CLICK_ID,
-                    *RIGHT_B_TOUCH_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_SQUEEZE_VALUE_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_TRIGGER_TOUCH_ID,
-                    *RIGHT_THUMBSTICK_X_ID,
-                    *RIGHT_THUMBSTICK_Y_ID,
-                    *RIGHT_THUMBSTICK_CLICK_ID,
-                    *RIGHT_THUMBSTICK_TOUCH_ID,
-                    *RIGHT_THUMBREST_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-        (
-            *VIVE_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: VIVE_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_SYSTEM_CLICK_ID,
-                    *LEFT_SQUEEZE_CLICK_ID,
-                    *LEFT_MENU_CLICK_ID,
-                    *LEFT_TRIGGER_CLICK_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_TRACKPAD_X_ID,
-                    *LEFT_TRACKPAD_Y_ID,
-                    *LEFT_TRACKPAD_CLICK_ID,
-                    *LEFT_TRACKPAD_TOUCH_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_SQUEEZE_CLICK_ID,
-                    *RIGHT_MENU_CLICK_ID,
-                    *RIGHT_TRIGGER_CLICK_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_TRACKPAD_X_ID,
-                    *RIGHT_TRACKPAD_Y_ID,
-                    *RIGHT_TRACKPAD_CLICK_ID,
-                    *RIGHT_TRACKPAD_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-        (
-            *INDEX_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: INDEX_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_SYSTEM_CLICK_ID,
-                    *LEFT_SYSTEM_TOUCH_ID,
-                    *LEFT_A_CLICK_ID,
-                    *LEFT_A_TOUCH_ID,
-                    *LEFT_B_CLICK_ID,
-                    *LEFT_B_TOUCH_ID,
-                    *LEFT_SQUEEZE_VALUE_ID,
-                    *LEFT_SQUEEZE_FORCE_ID,
-                    *LEFT_TRIGGER_CLICK_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_TRIGGER_TOUCH_ID,
-                    *LEFT_THUMBSTICK_X_ID,
-                    *LEFT_THUMBSTICK_Y_ID,
-                    *LEFT_THUMBSTICK_CLICK_ID,
-                    *LEFT_THUMBSTICK_TOUCH_ID,
-                    *LEFT_TRACKPAD_X_ID,
-                    *LEFT_TRACKPAD_Y_ID,
-                    *LEFT_TRACKPAD_FORCE_ID,
-                    *LEFT_TRACKPAD_TOUCH_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_SYSTEM_TOUCH_ID,
-                    *RIGHT_A_CLICK_ID,
-                    *RIGHT_A_TOUCH_ID,
-                    *RIGHT_B_CLICK_ID,
-                    *RIGHT_B_TOUCH_ID,
-                    *RIGHT_SQUEEZE_VALUE_ID,
-                    *RIGHT_SQUEEZE_FORCE_ID,
-                    *RIGHT_TRIGGER_CLICK_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_TRIGGER_TOUCH_ID,
-                    *RIGHT_THUMBSTICK_X_ID,
-                    *RIGHT_THUMBSTICK_Y_ID,
-                    *RIGHT_THUMBSTICK_CLICK_ID,
-                    *RIGHT_THUMBSTICK_TOUCH_ID,
-                    *RIGHT_TRACKPAD_X_ID,
-                    *RIGHT_TRACKPAD_Y_ID,
-                    *RIGHT_TRACKPAD_FORCE_ID,
-                    *RIGHT_TRACKPAD_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-        (
-            *PICO_NEO3_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: PICO_NEO3_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_X_CLICK_ID,
-                    *LEFT_X_TOUCH_ID,
-                    *LEFT_Y_CLICK_ID,
-                    *LEFT_Y_TOUCH_ID,
-                    *LEFT_MENU_CLICK_ID,
-                    *LEFT_SYSTEM_CLICK_ID,
-                    *LEFT_TRIGGER_CLICK_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_TRIGGER_TOUCH_ID,
-                    *LEFT_THUMBSTICK_Y_ID,
-                    *LEFT_THUMBSTICK_X_ID,
-                    *LEFT_THUMBSTICK_CLICK_ID,
-                    *LEFT_THUMBSTICK_TOUCH_ID,
-                    *LEFT_SQUEEZE_CLICK_ID,
-                    *LEFT_SQUEEZE_VALUE_ID,
-                    *LEFT_THUMBREST_TOUCH_ID,
-                    *RIGHT_A_CLICK_ID,
-                    *RIGHT_A_TOUCH_ID,
-                    *RIGHT_B_CLICK_ID,
-                    *RIGHT_B_TOUCH_ID,
-                    *RIGHT_MENU_CLICK_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_TRIGGER_CLICK_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_TRIGGER_TOUCH_ID,
-                    *RIGHT_THUMBSTICK_Y_ID,
-                    *RIGHT_THUMBSTICK_X_ID,
-                    *RIGHT_THUMBSTICK_CLICK_ID,
-                    *RIGHT_THUMBSTICK_TOUCH_ID,
-                    *RIGHT_SQUEEZE_CLICK_ID,
-                    *RIGHT_SQUEEZE_VALUE_ID,
-                    *RIGHT_THUMBREST_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-        (
-            *PICO4_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: PICO4_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_X_CLICK_ID,
-                    *LEFT_X_TOUCH_ID,
-                    *LEFT_Y_CLICK_ID,
-                    *LEFT_Y_TOUCH_ID,
-                    *LEFT_MENU_CLICK_ID,
-                    *LEFT_SYSTEM_CLICK_ID,
-                    *LEFT_TRIGGER_CLICK_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_TRIGGER_TOUCH_ID,
-                    *LEFT_THUMBSTICK_Y_ID,
-                    *LEFT_THUMBSTICK_X_ID,
-                    *LEFT_THUMBSTICK_CLICK_ID,
-                    *LEFT_THUMBSTICK_TOUCH_ID,
-                    *LEFT_SQUEEZE_CLICK_ID,
-                    *LEFT_SQUEEZE_VALUE_ID,
-                    *LEFT_THUMBREST_TOUCH_ID,
-                    *RIGHT_A_CLICK_ID,
-                    *RIGHT_A_TOUCH_ID,
-                    *RIGHT_B_CLICK_ID,
-                    *RIGHT_B_TOUCH_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_TRIGGER_CLICK_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_TRIGGER_TOUCH_ID,
-                    *RIGHT_THUMBSTICK_Y_ID,
-                    *RIGHT_THUMBSTICK_X_ID,
-                    *RIGHT_THUMBSTICK_CLICK_ID,
-                    *RIGHT_THUMBSTICK_TOUCH_ID,
-                    *RIGHT_SQUEEZE_CLICK_ID,
-                    *RIGHT_SQUEEZE_VALUE_ID,
-                    *RIGHT_THUMBREST_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-        (
-            *FOCUS3_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: FOCUS3_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_X_CLICK_ID,
-                    *LEFT_Y_CLICK_ID,
-                    *LEFT_MENU_CLICK_ID,
-                    *LEFT_SQUEEZE_CLICK_ID,
-                    // *LEFT_SQUEEZE_TOUCH_ID, // not actually working
-                    *LEFT_SQUEEZE_VALUE_ID,
-                    *LEFT_TRIGGER_CLICK_ID,
-                    *LEFT_TRIGGER_TOUCH_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_THUMBSTICK_X_ID,
-                    *LEFT_THUMBSTICK_Y_ID,
-                    *LEFT_THUMBSTICK_CLICK_ID,
-                    *LEFT_THUMBSTICK_TOUCH_ID,
-                    *LEFT_THUMBREST_TOUCH_ID,
-                    *RIGHT_A_CLICK_ID,
-                    *RIGHT_B_CLICK_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_SQUEEZE_CLICK_ID,
-                    // *RIGHT_SQUEEZE_TOUCH_ID, // not actually working
-                    *RIGHT_SQUEEZE_VALUE_ID,
-                    *RIGHT_TRIGGER_CLICK_ID,
-                    *RIGHT_TRIGGER_TOUCH_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_THUMBSTICK_X_ID,
-                    *RIGHT_THUMBSTICK_Y_ID,
-                    *RIGHT_THUMBSTICK_CLICK_ID,
-                    *RIGHT_THUMBSTICK_TOUCH_ID,
-                    *RIGHT_THUMBREST_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-        (
-            *YVR_CONTROLLER_PROFILE_ID,
-            InteractionProfileInfo {
-                path: YVR_CONTROLLER_PROFILE_PATH,
-                button_set: [
-                    *LEFT_X_CLICK_ID,
-                    *LEFT_Y_CLICK_ID,
-                    *LEFT_MENU_CLICK_ID,
-                    *LEFT_SQUEEZE_CLICK_ID,
-                    *LEFT_TRIGGER_TOUCH_ID,
-                    *LEFT_TRIGGER_VALUE_ID,
-                    *LEFT_THUMBSTICK_X_ID,
-                    *LEFT_THUMBSTICK_Y_ID,
-                    *LEFT_THUMBSTICK_CLICK_ID,
-                    *LEFT_THUMBSTICK_TOUCH_ID,
-                    *LEFT_THUMBREST_TOUCH_ID,
-                    *RIGHT_A_CLICK_ID,
-                    *RIGHT_B_CLICK_ID,
-                    *RIGHT_SYSTEM_CLICK_ID,
-                    *RIGHT_SQUEEZE_CLICK_ID,
-                    *RIGHT_TRIGGER_TOUCH_ID,
-                    *RIGHT_TRIGGER_VALUE_ID,
-                    *RIGHT_THUMBSTICK_X_ID,
-                    *RIGHT_THUMBSTICK_Y_ID,
-                    *RIGHT_THUMBSTICK_CLICK_ID,
-                    *RIGHT_THUMBSTICK_TOUCH_ID,
-                    *RIGHT_THUMBREST_TOUCH_ID,
-                ]
-                .into_iter()
-                .collect(),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect()
-});
+pub static CONTROLLER_PROFILE_INFO: LazyLock<HashMap<u64, InteractionProfileInfo>> =
+    LazyLock::new(|| {
+        [
+            (
+                *QUEST_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: QUEST_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_X_TOUCH_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_Y_TOUCH_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_THUMBREST_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_THUMBREST_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *VIVE_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: VIVE_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_SYSTEM_CLICK_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRACKPAD_X_ID,
+                        *LEFT_TRACKPAD_Y_ID,
+                        *LEFT_TRACKPAD_CLICK_ID,
+                        *LEFT_TRACKPAD_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        *RIGHT_MENU_CLICK_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRACKPAD_X_ID,
+                        *RIGHT_TRACKPAD_Y_ID,
+                        *RIGHT_TRACKPAD_CLICK_ID,
+                        *RIGHT_TRACKPAD_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *INDEX_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: INDEX_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_SYSTEM_CLICK_ID,
+                        *LEFT_SYSTEM_TOUCH_ID,
+                        *LEFT_A_CLICK_ID,
+                        *LEFT_A_TOUCH_ID,
+                        *LEFT_B_CLICK_ID,
+                        *LEFT_B_TOUCH_ID,
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_SQUEEZE_FORCE_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_TRACKPAD_X_ID,
+                        *LEFT_TRACKPAD_Y_ID,
+                        *LEFT_TRACKPAD_FORCE_ID,
+                        *LEFT_TRACKPAD_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_SYSTEM_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_SQUEEZE_FORCE_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_TRACKPAD_X_ID,
+                        *RIGHT_TRACKPAD_Y_ID,
+                        *RIGHT_TRACKPAD_FORCE_ID,
+                        *RIGHT_TRACKPAD_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *PICO_G3_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: PICO_G3_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRACKPAD_Y_ID,
+                        *LEFT_TRACKPAD_X_ID,
+                        *LEFT_TRACKPAD_CLICK_ID,
+                        *LEFT_TRACKPAD_TOUCH_ID,
+                        *RIGHT_MENU_CLICK_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRACKPAD_Y_ID,
+                        *RIGHT_TRACKPAD_X_ID,
+                        *RIGHT_TRACKPAD_CLICK_ID,
+                        *RIGHT_TRACKPAD_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *PICO_NEO3_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: PICO_NEO3_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_X_TOUCH_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_Y_TOUCH_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_SYSTEM_CLICK_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_THUMBREST_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_MENU_CLICK_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_THUMBREST_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *PICO4_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: PICO4_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_X_TOUCH_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_Y_TOUCH_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_SYSTEM_CLICK_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_THUMBREST_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_THUMBREST_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *PICO4S_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: PICO4S_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_X_TOUCH_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_Y_TOUCH_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_SYSTEM_CLICK_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_THUMBREST_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_THUMBREST_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *PSVR2_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: PSVR2_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_X_TOUCH_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_Y_TOUCH_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_MENU_TOUCH_ID,
+                        *LEFT_SYSTEM_CLICK_ID,
+                        *LEFT_SYSTEM_TOUCH_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_SQUEEZE_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_SYSTEM_TOUCH_ID,
+                        *RIGHT_MENU_CLICK_ID,
+                        *RIGHT_MENU_TOUCH_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_SQUEEZE_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *FOCUS3_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: FOCUS3_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        // *LEFT_SQUEEZE_TOUCH_ID, // not actually working
+                        *LEFT_SQUEEZE_VALUE_ID,
+                        *LEFT_TRIGGER_CLICK_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_THUMBREST_TOUCH_ID,
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        // *RIGHT_SQUEEZE_TOUCH_ID, // not actually working
+                        *RIGHT_SQUEEZE_VALUE_ID,
+                        *RIGHT_TRIGGER_CLICK_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_THUMBREST_TOUCH_ID,
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+            (
+                *YVR_CONTROLLER_PROFILE_ID,
+                InteractionProfileInfo {
+                    path: YVR_CONTROLLER_PROFILE_PATH,
+                    button_set: [
+                        *LEFT_X_CLICK_ID,
+                        *LEFT_X_TOUCH_ID,
+                        *LEFT_Y_CLICK_ID,
+                        *LEFT_Y_TOUCH_ID,
+                        *LEFT_MENU_CLICK_ID,
+                        *LEFT_SQUEEZE_CLICK_ID,
+                        *LEFT_TRIGGER_TOUCH_ID,
+                        *LEFT_TRIGGER_VALUE_ID,
+                        *LEFT_THUMBSTICK_X_ID,
+                        *LEFT_THUMBSTICK_Y_ID,
+                        *LEFT_THUMBSTICK_CLICK_ID,
+                        *LEFT_THUMBSTICK_TOUCH_ID,
+                        *LEFT_THUMBREST_TOUCH_ID, // might not actually be present?
+                        *RIGHT_A_CLICK_ID,
+                        *RIGHT_A_TOUCH_ID,
+                        *RIGHT_B_CLICK_ID,
+                        *RIGHT_B_TOUCH_ID,
+                        *RIGHT_SYSTEM_CLICK_ID,
+                        *RIGHT_SQUEEZE_CLICK_ID,
+                        *RIGHT_TRIGGER_TOUCH_ID,
+                        *RIGHT_TRIGGER_VALUE_ID,
+                        *RIGHT_THUMBSTICK_X_ID,
+                        *RIGHT_THUMBSTICK_Y_ID,
+                        *RIGHT_THUMBSTICK_CLICK_ID,
+                        *RIGHT_THUMBSTICK_TOUCH_ID,
+                        *RIGHT_THUMBREST_TOUCH_ID, // might not actually be present?
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            ),
+        ]
+        .into_iter()
+        .collect()
+    });

@@ -13,7 +13,7 @@ on:
 
 jobs:
   prepare_release:
-    runs-on: windows-2019
+    runs-on: windows-2022
     outputs:
       release_ref: ${{ steps.output_ref.outputs.release_ref }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -62,16 +62,13 @@ jobs:
           commitish: ${{ steps.output_ref.outputs.release_ref }}
 
   build_windows_streamer:
-    runs-on: windows-2019
+    runs-on: windows-2022
     needs: [prepare_release]
-    env:
-      # For bindgen to find libclang.dll, we need to give it the path to the Visual Studio package.
-      # This is specific to the GitHub windows-2019 runner.
-      LIBCLANG_PATH: 'C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Tools\Llvm\x64\bin'
     steps:
       - uses: actions/checkout@v2
         with:
           ref: ${{ needs.prepare_release.outputs.release_ref }}
+          submodules: true
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -87,9 +84,8 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo xtask prepare-deps --platform windows --ci
-          cargo xtask package-streamer --gpl
-          cargo xtask package-launcher
+          cargo xtask package-streamer --gpl --ci
+          cargo xtask package-launcher --ci
 
       - name: Upload streamer
         uses: actions/upload-release-asset@v1
@@ -111,12 +107,13 @@ jobs:
           asset_content_type: application/zip
 
   build_linux_streamer:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: [prepare_release]
     steps:
       - uses: actions/checkout@v2
         with:
           ref: ${{ needs.prepare_release.outputs.release_ref }}
+          submodules: true
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -130,17 +127,15 @@ jobs:
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 25088A0359807596
           echo "deb http://ppa.launchpad.net/pipewire-debian/pipewire-upstream/ubuntu $(lsb_release -cs) main" | sudo tee -a /etc/apt/sources.list.d/pipewire-upstream.list
           sudo apt-get update
-          sudo apt-get install libfuse2 build-essential pkg-config nasm libva-dev libdrm-dev libvulkan-dev libx264-dev libx265-dev cmake libasound2-dev libjack-jackd2-dev libxrandr-dev libunwind-dev libffmpeg-nvenc-dev nvidia-cuda-toolkit libgtk-3-dev libpipewire-0.3-dev libspa-0.2-dev
-          cp alvr/xtask/deb/cuda.pc /usr/share/pkgconfig
-          cargo xtask prepare-deps --platform linux
+          sudo apt-get install libfuse2 build-essential pkg-config nasm libva-dev libdrm-dev libvulkan-dev libx264-dev libx265-dev cmake libasound2-dev libjack-jackd2-dev libxrandr-dev libunwind-dev libgtk-3-dev libpipewire-0.3-dev libspa-0.2-dev
 
       - name: Build and package ALVR (.tar.gz)
         id: build
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo xtask package-streamer --gpl
-          cargo xtask package-launcher
+          cargo xtask package-streamer --gpl --ci
+          cargo xtask package-launcher --ci
 
       - name: Upload streamer (tar.gz)
         uses: actions/upload-release-asset@v1
@@ -168,6 +163,7 @@ jobs:
       - uses: actions/checkout@v2
         with:
           ref: ${{ needs.prepare_release.outputs.release_ref }}
+          submodules: true
 
       - name: Build and install dependencies
         env:
@@ -200,6 +196,7 @@ jobs:
       - uses: actions/checkout@v2
         with:
           ref: ${{ needs.prepare_release.outputs.release_ref }}
+          submodules: true
         
       - uses: actions-rs/toolchain@v1
         with:
@@ -212,7 +209,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-29"
+          packages: "platforms;android-32"
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
@@ -223,9 +220,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cargo xtask prepare-deps --platform android --ci
-          cargo xtask package-client
+        run: cargo xtask package-client --ci
 
       - name: Sign APK
         uses: ilharp/sign-android-release@v1

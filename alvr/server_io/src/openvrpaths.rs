@@ -1,6 +1,6 @@
 use alvr_common::{
-    anyhow::{bail, Result},
     ToAny,
+    anyhow::{Result, bail},
 };
 use encoding_rs_io::DecodeReaderBytes;
 use serde_json as json;
@@ -26,7 +26,25 @@ fn openvr_source_file_path() -> Result<PathBuf> {
     }
 }
 
-pub(crate) fn load_openvr_paths_json() -> Result<json::Value> {
+pub fn steamvr_settings_file_path() -> Result<PathBuf> {
+    let path = if cfg!(windows) {
+        // N.B. if ever implementing this: given Steam can be installed on another
+        // drive, etc., this should probably start by looking at Windows registry keys.
+        bail!("Not implemented for Windows.") // Original motive for implementation had little reason for Windows.
+    } else {
+        dirs::data_dir()
+    }
+    .to_any()?
+    .join("Steam/config/steamvr.vrsettings");
+
+    if path.exists() {
+        Ok(path)
+    } else {
+        bail!("{} does not exist", path.to_string_lossy())
+    }
+}
+
+pub fn load_openvr_paths_json() -> Result<json::Value> {
     let file = File::open(openvr_source_file_path()?)?;
 
     let mut file_content_decoded = String::new();
@@ -37,7 +55,7 @@ pub(crate) fn load_openvr_paths_json() -> Result<json::Value> {
     Ok(value)
 }
 
-pub(crate) fn save_openvr_paths_json(openvr_paths: &json::Value) -> Result<()> {
+pub fn save_openvr_paths_json(openvr_paths: &json::Value) -> Result<()> {
     let file_content = json::to_string_pretty(openvr_paths)?;
 
     fs::write(openvr_source_file_path()?, file_content)?;
@@ -45,10 +63,9 @@ pub(crate) fn save_openvr_paths_json(openvr_paths: &json::Value) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn from_openvr_paths(paths: &json::Value) -> Vec<std::path::PathBuf> {
-    let paths_vec = match paths.as_array() {
-        Some(vec) => vec,
-        None => return vec![],
+pub fn from_openvr_paths(paths: &json::Value) -> Vec<std::path::PathBuf> {
+    let Some(paths_vec) = paths.as_array() else {
+        return vec![];
     };
 
     paths_vec
@@ -58,7 +75,7 @@ pub(crate) fn from_openvr_paths(paths: &json::Value) -> Vec<std::path::PathBuf> 
         .collect()
 }
 
-pub(crate) fn to_openvr_paths(paths: &[PathBuf]) -> json::Value {
+pub fn to_openvr_paths(paths: &[PathBuf]) -> json::Value {
     let paths_vec = paths
         .iter()
         .map(|p| p.to_string_lossy().into())

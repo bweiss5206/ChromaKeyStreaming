@@ -4,7 +4,7 @@ use std::{env, fmt::Write, fs, path::PathBuf};
 fn main() {
     let openvr_driver_header_string =
         fs::read_to_string(alvr_filesystem::workspace_dir().join("openvr/headers/openvr_driver.h"))
-            .unwrap();
+            .expect("Missing openvr header files, did you clone the submodule?\n");
 
     let property_finder = Regex::new(
         r"\tProp_([A-Za-z\d_]+)_(Bool|Int32|Uint64|Float|String|Vector3)[\t ]+= ([0-9]+)",
@@ -21,13 +21,7 @@ fn main() {
         .captures_iter(&openvr_driver_header_string)
         .map(|cap| {
             let code = cap[3].into();
-            let name = if code == "1007" {
-                "HardwareRevisionString".into()
-            } else if code == "1017" {
-                "HardwareRevisionUint64".into()
-            } else {
-                cap[1].replace('_', "")
-            };
+            let name = format!("{}{}", cap[1].replace('_', ""), &cap[2]);
 
             PropInfo {
                 name,
@@ -38,27 +32,18 @@ fn main() {
         .collect::<Vec<_>>();
 
     let mut mappings_fn_string: String = String::from(
-        r"#[repr(u32)]
-#[derive(SettingsSchema, Serialize, Deserialize, Clone, Debug)]
-pub enum OpenvrProperty {",
+        r"
+#[repr(u32)]
+#[derive(SettingsSchema, Serialize, Deserialize, Clone, Copy, Debug)]
+pub enum OpenvrPropKey {",
     );
 
     for info in &prop_info {
-        let ty = match info.ty.as_str() {
-            "Bool" => "bool",
-            "Int32" => "i32",
-            "Uint64" => "u64",
-            "Float" => "f32",
-            "String" => "String",
-            "Vector3" => "[f32; 3]",
-            _ => "()",
-        };
-
         write!(
             mappings_fn_string,
             r"
-    {}({}) = {},",
-            &info.name, ty, &info.code
+    {} = {},",
+            &info.name, &info.code
         )
         .unwrap();
     }
@@ -67,72 +52,25 @@ pub enum OpenvrProperty {",
         r"
 }
 
-#[derive(Clone, Debug)]
-pub enum OpenvrPropValue {
-    Bool(bool),
-    Float(f32),
-    Int32(i32),
-    Uint64(u64),
-    Vector3([f32; 3]),
-    Double(f64),
-    String(String),
-}
-
-impl OpenvrProperty {
-    pub fn into_key_value(self) -> (u32, OpenvrPropValue) {
-        match self {",
+#[expect(clippy::match_same_arms)]
+pub fn openvr_prop_key_to_type(key: OpenvrPropKey) -> OpenvrPropType {
+    match key {",
     );
 
     for info in &prop_info {
         write!(
             mappings_fn_string,
             r"
-            OpenvrProperty::{}(value) => ({}, OpenvrPropValue::{}(value)),",
-            &info.name, info.code, info.ty,
+        OpenvrPropKey::{} => OpenvrPropType::{},",
+            &info.name, info.ty
         )
         .unwrap();
     }
 
     mappings_fn_string.push_str(
         r"
-        }
     }
 }
-
-static OPENVR_PROPS_DEFAULT: alvr_common::once_cell::sync::Lazy<OpenvrPropertyDefault> = 
-    alvr_common::once_cell::sync::Lazy::new(|| OpenvrPropertyDefault {",
-    );
-
-    for info in &prop_info {
-        let default = match info.ty.as_str() {
-            "Bool" => "false",
-            "Int32" => "0",
-            "Uint64" => "0",
-            "Float" => "0.0",
-            "String" => "String::new()",
-            "Vector3" => {
-                r"ArrayDefault {
-            gui_collapsed: false,
-            content: [0.0, 0.0, 0.0],
-        }"
-            }
-
-            _ => "()",
-        };
-
-        write!(
-            mappings_fn_string,
-            r"
-        {}: {},",
-            &info.name, default
-        )
-        .unwrap();
-    }
-
-    mappings_fn_string.push_str(
-        r"
-        variant: OpenvrPropertyDefaultVariant::TrackingSystemName,
-    });
 ",
     );
 

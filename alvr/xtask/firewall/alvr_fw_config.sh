@@ -10,7 +10,7 @@
 
 firewalld_cfg() {
     # Iterate around each active zone
-    for zone in $(firewall-cmd --get-active-zones | grep -P '^\w+.*\w$'); do
+    for zone in $(firewall-cmd --get-active-zones | grep -P --only-matching '^[\w/-]+'); do
         if [ "${1}" == 'add' ]; then
             # If running or permanent alvr service is missing, add it
             if ! firewall-cmd --zone="${zone}" --list-services | grep 'alvr' >/dev/null 2>&1; then
@@ -60,6 +60,10 @@ iptables_cfg() {
     second_port_match_count=$(iptables -S | grep -c '9944')
     if [ "${1}" == 'add' ]; then
         if [ "$first_port_match_count" == "0" ] || [ "$second_port_match_count" == "0" ]; then
+            if [ ! -d '/etc/iptables' ]; then
+                mkdir '/etc/iptables'
+            fi
+
             iptables -I OUTPUT -p tcp --sport 9943 -j ACCEPT
             iptables -I INPUT -p tcp --dport 9943 -j ACCEPT
             iptables -I OUTPUT -p udp --sport 9943 -j ACCEPT

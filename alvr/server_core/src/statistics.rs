@@ -1,5 +1,5 @@
-use alvr_common::{SlidingWindowAverage, HEAD_ID};
-use alvr_events::{EventType, GraphStatistics, NominalBitrateStats, StatisticsSummary};
+use alvr_common::{HEAD_ID, SlidingWindowAverage};
+use alvr_events::{BitrateDirectives, EventType, GraphStatistics, StatisticsSummary};
 use alvr_packets::ClientStatistics;
 use std::{
     collections::{HashMap, VecDeque},
@@ -7,6 +7,7 @@ use std::{
 };
 
 const FULL_REPORT_INTERVAL: Duration = Duration::from_millis(500);
+const EPS_INTERVAL: Duration = Duration::from_micros(1);
 
 pub struct HistoryFrame {
     target_timestamp: Duration,
@@ -49,14 +50,12 @@ pub struct StatisticsManager {
     video_packets_partial_sum: usize,
     video_bytes_total: usize,
     video_bytes_partial_sum: usize,
-    packets_lost_total: usize,
-    packets_lost_partial_sum: usize,
     battery_gauges: HashMap<u64, BatteryData>,
     steamvr_pipeline_latency: Duration,
-    total_pipeline_latency_average: SlidingWindowAverage<Duration>,
+    motion_to_photon_latency_average: SlidingWindowAverage<Duration>,
     last_vsync_time: Instant,
     frame_interval: Duration,
-    last_nominal_bitrate_stats: NominalBitrateStats,
+    last_throughput_directives: BitrateDirectives,
 }
 
 impl StatisticsManager {
@@ -76,19 +75,17 @@ impl StatisticsManager {
             video_packets_partial_sum: 0,
             video_bytes_total: 0,
             video_bytes_partial_sum: 0,
-            packets_lost_total: 0,
-            packets_lost_partial_sum: 0,
             battery_gauges: HashMap::new(),
             steamvr_pipeline_latency: Duration::from_secs_f32(
                 steamvr_pipeline_frames * nominal_server_frame_interval.as_secs_f32(),
             ),
-            total_pipeline_latency_average: SlidingWindowAverage::new(
+            motion_to_photon_latency_average: SlidingWindowAverage::new(
                 Duration::ZERO,
                 max_history_size,
             ),
             last_vsync_time: Instant::now(),
             frame_interval: nominal_server_frame_interval,
-            last_nominal_bitrate_stats: NominalBitrateStats::default(),
+            last_throughput_directives: BitrateDirectives::default(),
         }
     }
 
@@ -164,11 +161,6 @@ impl StatisticsManager {
         }
     }
 
-    pub fn report_packet_loss(&mut self) {
-        self.packets_lost_total += 1;
-        self.packets_lost_partial_sum += 1;
-    }
-
     pub fn report_battery(&mut self, device_id: u64, gauge_value: f32, is_plugged: bool) {
         *self.battery_gauges.entry(device_id).or_default() = BatteryData {
             gauge_value,
@@ -176,13 +168,16 @@ impl StatisticsManager {
         };
     }
 
-    pub fn report_nominal_bitrate_stats(&mut self, stats: NominalBitrateStats) {
-        self.last_nominal_bitrate_stats = stats;
+    pub fn report_throughput_stats(&mut self, stats: BitrateDirectives) {
+        self.last_throughput_directives = stats;
     }
 
     // Called every frame. Some statistics are reported once every frame
     // Returns (network latency, game time latency)
     pub fn report_statistics(&mut self, client_stats: ClientStatistics) -> (Duration, Duration) {
+        self.motion_to_photon_latency_average
+            .submit_sample(client_stats.total_pipeline_latency);
+
         if let Some(frame) = self
             .history_buffer
             .iter_mut()
@@ -218,16 +213,10 @@ impl StatisticsManager {
                     + client_stats.vsync_queue,
             );
 
-            let client_fps = 1.0
-                / client_stats
-                    .frame_interval
-                    .max(Duration::from_millis(1))
-                    .as_secs_f32();
-            let server_fps = 1.0
-                / self
-                    .last_frame_present_interval
-                    .max(Duration::from_millis(1))
-                    .as_secs_f32();
+            let client_fps =
+                1.0 / Duration::max(client_stats.frame_interval, EPS_INTERVAL).as_secs_f32();
+            let server_fps =
+                1.0 / Duration::max(self.last_frame_present_interval, EPS_INTERVAL).as_secs_f32();
 
             if self.last_full_report_instant + FULL_REPORT_INTERVAL < Instant::now() {
                 self.last_full_report_instant += FULL_REPORT_INTERVAL;
@@ -246,9 +235,6 @@ impl StatisticsManager {
                     network_latency_ms: network_latency.as_secs_f32() * 1000.,
                     encode_latency_ms: encoder_latency.as_secs_f32() * 1000.,
                     decode_latency_ms: client_stats.video_decode.as_secs_f32() * 1000.,
-                    packets_lost_total: self.packets_lost_total,
-                    packets_lost_per_sec: (self.packets_lost_partial_sum as f32 / interval_secs)
-                        as _,
                     client_fps: client_fps as _,
                     server_fps: server_fps as _,
                     battery_hmd: (self
@@ -268,16 +254,13 @@ impl StatisticsManager {
 
                 self.video_packets_partial_sum = 0;
                 self.video_bytes_partial_sum = 0;
-                self.packets_lost_partial_sum = 0;
             }
 
-            // While not accurate, this prevents NaNs and zeros that would cause a crash or pollute
-            // the graph
-            let bitrate_bps = if network_latency != Duration::ZERO {
-                frame.video_packet_bytes as f32 * 8.0 / network_latency.as_secs_f32()
-            } else {
-                0.0
-            };
+            let packet_bits = frame.video_packet_bytes as f32 * 8.0;
+            let throughput_bps =
+                packet_bits / Duration::max(network_latency, EPS_INTERVAL).as_secs_f32();
+            let bitrate_bps = packet_bits
+                / Duration::max(self.last_frame_present_interval, EPS_INTERVAL).as_secs_f32();
 
             // todo: use target timestamp in nanoseconds. the dashboard needs to use the first
             // timestamp as the graph time origin.
@@ -293,8 +276,9 @@ impl StatisticsManager {
                 vsync_queue_s: client_stats.vsync_queue.as_secs_f32(),
                 client_fps,
                 server_fps,
-                nominal_bitrate: self.last_nominal_bitrate_stats.clone(),
-                actual_bitrate_bps: bitrate_bps,
+                bitrate_directives: self.last_throughput_directives.clone(),
+                throughput_bps,
+                bitrate_bps,
             }));
 
             (network_latency, game_time_latency)
@@ -303,14 +287,13 @@ impl StatisticsManager {
         }
     }
 
-    pub fn video_pipeline_latency_average(&self) -> Duration {
-        self.total_pipeline_latency_average.get_average()
+    pub fn motion_to_photon_latency_average(&self) -> Duration {
+        self.motion_to_photon_latency_average.get_average()
     }
 
     pub fn tracker_pose_time_offset(&self) -> Duration {
         // This is the opposite of the client's StatisticsManager::tracker_prediction_offset().
         self.steamvr_pipeline_latency
-            .saturating_sub(self.total_pipeline_latency_average.get_average())
     }
 
     // NB: this call is non-blocking, waiting should be done externally

@@ -1,12 +1,11 @@
 use super::{
-    presets::{builtin_schema, PresetControl},
     NestingInfo, SettingControl,
+    presets::{PresetControl, builtin_schema},
 };
-use crate::dashboard::{DisplayString, ServerRequest};
-use alvr_gui_common::theme;
-use alvr_packets::AudioDevicesList;
+use crate::dashboard::ServerRequest;
+use alvr_gui_common::{DisplayString, theme};
 use alvr_session::{SessionSettings, Settings};
-use eframe::egui::{self, Align, Frame, Grid, Layout, RichText, ScrollArea, Ui};
+use eframe::egui::{Align, Frame, Grid, Layout, RichText, ScrollArea, Ui};
 #[cfg(target_arch = "wasm32")]
 use instant::Instant;
 use serde_json as json;
@@ -16,6 +15,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 const DATA_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
+const MIN_COLUMN_SIZE: f32 = 300.0;
 
 struct TopLevelEntry {
     id: DisplayString,
@@ -27,8 +27,11 @@ pub struct SettingsTab {
     resolution_preset: PresetControl,
     framerate_preset: PresetControl,
     encoder_preset: PresetControl,
-    game_audio_preset: Option<PresetControl>,
-    microphone_preset: Option<PresetControl>,
+    foveation_preset: PresetControl,
+    codec_preset: PresetControl,
+    game_audio_preset: PresetControl,
+    microphone_preset: PresetControl,
+    hand_tracking_interaction_preset: PresetControl,
     eye_face_tracking_preset: PresetControl,
     top_level_entries: Vec<TopLevelEntry>,
     session_settings_json: Option<json::Value>,
@@ -69,8 +72,13 @@ impl SettingsTab {
             resolution_preset: PresetControl::new(builtin_schema::resolution_schema()),
             framerate_preset: PresetControl::new(builtin_schema::framerate_schema()),
             encoder_preset: PresetControl::new(builtin_schema::encoder_preset_schema()),
-            game_audio_preset: None,
-            microphone_preset: None,
+            foveation_preset: PresetControl::new(builtin_schema::foveation_preset_schema()),
+            codec_preset: PresetControl::new(builtin_schema::codec_preset_schema()),
+            game_audio_preset: PresetControl::new(builtin_schema::game_audio_schema()),
+            microphone_preset: PresetControl::new(builtin_schema::microphone_schema()),
+            hand_tracking_interaction_preset: PresetControl::new(
+                builtin_schema::hand_tracking_interaction_schema(),
+            ),
             eye_face_tracking_preset: PresetControl::new(builtin_schema::eye_face_tracking_schema()),
             top_level_entries,
             session_settings_json: None,
@@ -86,31 +94,19 @@ impl SettingsTab {
         self.framerate_preset
             .update_session_settings(&settings_json);
         self.encoder_preset.update_session_settings(&settings_json);
-        if let Some(preset) = self.game_audio_preset.as_mut() {
-            preset.update_session_settings(&settings_json)
-        }
-        if let Some(preset) = self.microphone_preset.as_mut() {
-            preset.update_session_settings(&settings_json)
-        }
+        self.foveation_preset
+            .update_session_settings(&settings_json);
+        self.codec_preset.update_session_settings(&settings_json);
+        self.game_audio_preset
+            .update_session_settings(&settings_json);
+        self.microphone_preset
+            .update_session_settings(&settings_json);
+        self.hand_tracking_interaction_preset
+            .update_session_settings(&settings_json);
         self.eye_face_tracking_preset
             .update_session_settings(&settings_json);
 
         self.session_settings_json = Some(settings_json);
-    }
-
-    pub fn update_audio_devices(&mut self, list: AudioDevicesList) {
-        let mut all_devices = list.output.clone();
-        all_devices.extend(list.input);
-
-        if let Some(json) = &self.session_settings_json {
-            let mut preset = PresetControl::new(builtin_schema::game_audio_schema(all_devices));
-            preset.update_session_settings(json);
-            self.game_audio_preset = Some(preset);
-
-            let mut preset = PresetControl::new(builtin_schema::microphone_schema(list.output));
-            preset.update_session_settings(json);
-            self.microphone_preset = Some(preset);
-        }
     }
 
     pub fn ui(&mut self, ui: &mut Ui) -> Vec<ServerRequest> {
@@ -122,10 +118,6 @@ impl SettingsTab {
                 requests.push(ServerRequest::GetSession);
             }
 
-            if self.game_audio_preset.is_none() {
-                requests.push(ServerRequest::GetAudioDevices);
-            }
-
             self.last_update_instant = now;
         }
 
@@ -133,7 +125,7 @@ impl SettingsTab {
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
             Frame::group(ui.style())
                 .fill(theme::DARKER_BG)
-                .inner_margin(egui::vec2(15.0, 12.0))
+                .inner_margin(theme::FRAME_PADDING)
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.selectable_value(
@@ -154,11 +146,12 @@ impl SettingsTab {
 
         if self.selected_top_tab_id == "presets" {
             ScrollArea::new([false, true])
-                .id_source("presets_scroll")
+                .id_salt("presets_scroll")
                 .show(ui, |ui| {
                     Grid::new("presets_grid")
                         .striped(true)
                         .num_columns(2)
+                        .min_col_width(MIN_COLUMN_SIZE)
                         .show(ui, |ui| {
                             path_value_pairs.extend(self.resolution_preset.ui(ui));
                             ui.end_row();
@@ -169,15 +162,20 @@ impl SettingsTab {
                             path_value_pairs.extend(self.encoder_preset.ui(ui));
                             ui.end_row();
 
-                            if let Some(preset) = &mut self.game_audio_preset {
-                                path_value_pairs.extend(preset.ui(ui));
-                                ui.end_row();
-                            }
+                            path_value_pairs.extend(self.foveation_preset.ui(ui));
+                            ui.end_row();
 
-                            if let Some(preset) = &mut self.microphone_preset {
-                                path_value_pairs.extend(preset.ui(ui));
-                                ui.end_row();
-                            }
+                            path_value_pairs.extend(self.codec_preset.ui(ui));
+                            ui.end_row();
+
+                            path_value_pairs.extend(self.game_audio_preset.ui(ui));
+                            ui.end_row();
+
+                            path_value_pairs.extend(self.microphone_preset.ui(ui));
+                            ui.end_row();
+
+                            path_value_pairs.extend(self.hand_tracking_interaction_preset.ui(ui));
+                            ui.end_row();
 
                             path_value_pairs.extend(self.eye_face_tracking_preset.ui(ui));
                             ui.end_row();
@@ -185,11 +183,12 @@ impl SettingsTab {
                 });
         } else {
             ScrollArea::new([false, true])
-                .id_source(format!("{}_scroll", self.selected_top_tab_id))
+                .id_salt(format!("{}_scroll", self.selected_top_tab_id))
                 .show(ui, |ui| {
                     Grid::new(format!("{}_grid", self.selected_top_tab_id))
                         .striped(true)
                         .num_columns(2)
+                        .min_col_width(MIN_COLUMN_SIZE)
                         .show(ui, |ui| {
                             if let Some(session_fragment) = &mut self.session_settings_json {
                                 let session_fragments_mut =
@@ -220,7 +219,7 @@ impl SettingsTab {
         }
 
         if !path_value_pairs.is_empty() {
-            requests.push(ServerRequest::SetValues(path_value_pairs));
+            requests.push(ServerRequest::SetSessionValues(path_value_pairs));
         }
 
         requests

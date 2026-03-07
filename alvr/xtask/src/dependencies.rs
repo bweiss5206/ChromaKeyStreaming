@@ -1,14 +1,12 @@
-use crate::command;
+use crate::{BuildPlatform, command};
 use alvr_filesystem as afs;
 use std::{fs, path::Path};
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
-pub fn update_submodules(sh: &Shell) {
-    let dir = sh.push_dir(afs::workspace_dir());
-    cmd!(sh, "git submodule update --init --recursive")
-        .run()
-        .unwrap();
-    std::mem::drop(dir);
+pub enum OpenXRLoadersSelection {
+    OnlyGeneric,
+    OnlyPico,
+    All,
 }
 
 pub fn choco_install(sh: &Shell, packages: &[&str]) -> Result<(), xshell::Error> {
@@ -63,23 +61,53 @@ pub fn prepare_ffmpeg_windows(deps_path: &Path) {
     command::download_and_extract_zip(
         &format!(
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/{}",
-            "ffmpeg-n5.1-latest-win64-gpl-shared-5.1.zip"
+            "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip"
         ),
         deps_path,
     )
     .unwrap();
 
     fs::rename(
-        deps_path.join("ffmpeg-n5.1-latest-win64-gpl-shared-5.1"),
+        deps_path.join("ffmpeg-n7.1-latest-win64-gpl-shared-7.1"),
         deps_path.join("ffmpeg"),
     )
     .unwrap();
 }
 
-pub fn prepare_windows_deps(skip_admin_priv: bool) {
+fn prepare_libvpl_windows(deps_path: &Path) {
     let sh = Shell::new().unwrap();
 
-    update_submodules(&sh);
+    const VERSION: &str = "2.15.0";
+
+    command::download_and_extract_zip(
+        &format!("https://github.com/intel/libvpl/archive/refs/tags/v{VERSION}.zip"),
+        deps_path,
+    )
+    .unwrap();
+
+    let final_path = deps_path.join("libvpl");
+
+    fs::rename(deps_path.join(format!("libvpl-{VERSION}")), &final_path).unwrap();
+
+    let install_prefix = final_path.join("alvr_build");
+    let _push_guard = sh.push_dir(final_path);
+
+    cmd!(
+        sh,
+        "cmake -B build -DUSE_MSVC_STATIC_RUNTIME=ON -DCMAKE_INSTALL_PREFIX={install_prefix}"
+    )
+    .run()
+    .unwrap();
+    cmd!(sh, "cmake --build build --config Release")
+        .run()
+        .unwrap();
+    cmd!(sh, "cmake --install build --config Release")
+        .run()
+        .unwrap();
+}
+
+pub fn prepare_windows_deps(skip_admin_priv: bool) {
+    let sh = Shell::new().unwrap();
 
     let deps_path = afs::deps_dir().join("windows");
     sh.remove_path(&deps_path).ok();
@@ -93,8 +121,8 @@ pub fn prepare_windows_deps(skip_admin_priv: bool) {
                 "unzip",
                 "llvm",
                 "vulkan-sdk",
-                "wixtoolset",
                 "pkgconfiglite",
+                "cmake",
             ],
         )
         .unwrap();
@@ -102,19 +130,18 @@ pub fn prepare_windows_deps(skip_admin_priv: bool) {
 
     prepare_x264_windows(&deps_path);
     prepare_ffmpeg_windows(&deps_path);
+    prepare_libvpl_windows(&deps_path);
 }
 
-pub fn prepare_linux_deps(nvenc_flag: bool) {
+pub fn prepare_linux_deps(enable_nvenc: bool) {
     let sh = Shell::new().unwrap();
-
-    update_submodules(&sh);
 
     let deps_path = afs::deps_dir().join("linux");
     sh.remove_path(&deps_path).ok();
     sh.create_dir(&deps_path).unwrap();
 
     build_x264_linux(&deps_path);
-    build_ffmpeg_linux(nvenc_flag, &deps_path);
+    build_ffmpeg_linux(enable_nvenc, &deps_path);
 }
 
 pub fn build_x264_linux(deps_path: &Path) {
@@ -150,7 +177,7 @@ pub fn build_x264_linux(deps_path: &Path) {
     cmd!(sh, "make install").run().unwrap();
 }
 
-pub fn build_ffmpeg_linux(nvenc_flag: bool, deps_path: &Path) {
+pub fn build_ffmpeg_linux(enable_nvenc: bool, deps_path: &Path) {
     let sh = Shell::new().unwrap();
 
     command::download_and_extract_zip(
@@ -202,16 +229,7 @@ pub fn build_ffmpeg_linux(nvenc_flag: bool, deps_path: &Path) {
     let ffmpeg_command = "for p in ../../../alvr/xtask/patches/*; do patch -p1 < $p; done";
     cmd!(sh, "bash -c {ffmpeg_command}").run().unwrap();
 
-    if nvenc_flag {
-        /*
-           Describing Nvidia specific options --nvccflags:
-           nvcc from CUDA toolkit version 11.0 or higher does not support compiling for 'compute_30' (default in ffmpeg)
-           52 is the minimum required for the current CUDA 11 version (Quadro M6000 , GeForce 900, GTX-970, GTX-980, GTX Titan X)
-           https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/
-           Anyway below 50 arch card don't support nvenc encoding hevc https://developer.nvidia.com/nvidia-video-codec-sdk (Supported devices)
-           Nvidia docs:
-           https://docs.nvidia.com/video-technologies/video-codec-sdk/ffmpeg-with-nvidia-gpu/#commonly-faced-issues-and-tips-to-resolve-them
-        */
+    if enable_nvenc {
         #[cfg(target_os = "linux")]
         {
             let codec_header_version = "12.1.14.0";
@@ -237,30 +255,10 @@ pub fn build_ffmpeg_linux(nvenc_flag: bool, deps_path: &Path) {
                 cmd!(sh, "bash -c {make_header_cmd}").run().unwrap();
             }
 
-            let cuda = pkg_config::Config::new().probe("cuda").unwrap();
-            let include_flags = cuda
-                .include_paths
-                .iter()
-                .map(|path| format!("-I{}", path.to_string_lossy()))
-                .reduce(|a, b| format!("{a} {b}"))
-                .expect("pkg-config cuda entry to have include-paths");
-            let link_flags = cuda
-                .link_paths
-                .iter()
-                .map(|path| format!("-L{}", path.to_string_lossy()))
-                .reduce(|a, b| format!("{a} {b}"))
-                .expect("pkg-config cuda entry to have link-paths");
-
             let nvenc_flags = &[
                 "--enable-encoder=h264_nvenc",
                 "--enable-encoder=hevc_nvenc",
                 "--enable-encoder=av1_nvenc",
-                "--enable-nonfree",
-                "--enable-cuda-nvcc",
-                "--enable-libnpp",
-                "--nvccflags=\"-gencode arch=compute_52,code=sm_52 -O2\"",
-                &format!("--extra-cflags=\"{include_flags}\""),
-                &format!("--extra-ldflags=\"{link_flags}\""),
             ];
 
             let env_vars = format!(
@@ -287,13 +285,33 @@ pub fn build_ffmpeg_linux(nvenc_flag: bool, deps_path: &Path) {
     cmd!(sh, "make install").run().unwrap();
 }
 
-pub fn prepare_macos_deps() {
-    let sh = Shell::new().unwrap();
+pub fn prepare_macos_deps() {}
 
-    update_submodules(&sh);
+pub fn prepare_server_deps(
+    platform: Option<BuildPlatform>,
+    skip_admin_priv: bool,
+    enable_nvenc: bool,
+) {
+    match platform {
+        Some(BuildPlatform::Windows) => prepare_windows_deps(skip_admin_priv),
+        Some(BuildPlatform::Linux) => prepare_linux_deps(enable_nvenc),
+        Some(BuildPlatform::Macos) => prepare_macos_deps(),
+        Some(BuildPlatform::Android) => panic!("Android is not supported"),
+        None => {
+            if cfg!(windows) {
+                prepare_windows_deps(skip_admin_priv);
+            } else if cfg!(target_os = "linux") {
+                prepare_linux_deps(enable_nvenc);
+            } else if cfg!(target_os = "macos") {
+                prepare_macos_deps();
+            } else {
+                panic!("Unsupported platform");
+            }
+        }
+    }
 }
 
-fn get_android_openxr_loaders() {
+fn get_android_openxr_loaders(selection: OpenXRLoadersSelection) {
     fn get_openxr_loader(name: &str, url: &str, source_dir: &str) {
         let sh = Shell::new().unwrap();
         let temp_dir = afs::build_dir().join("temp_download");
@@ -311,25 +329,34 @@ fn get_android_openxr_loaders() {
         fs::remove_dir_all(&temp_dir).ok();
     }
 
+    const OPENXR_VERSION: &str = "1.1.36";
     get_openxr_loader(
         "",
         &format!(
-            "https://github.com/KhronosGroup/OpenXR-SDK-Source/releases/download/{}",
-            "release-1.1.38/openxr_loader_for_android-1.1.38.aar",
+            "https://github.com/KhronosGroup/OpenXR-SDK-Source/releases/download/\
+            release-{OPENXR_VERSION}/openxr_loader_for_android-{OPENXR_VERSION}.aar",
         ),
         "prefab/modules/openxr_loader/libs/android.arm64-v8a",
     );
+
+    if matches!(selection, OpenXRLoadersSelection::OnlyGeneric) {
+        return;
+    }
+
+    get_openxr_loader(
+        "_pico_old",
+        "https://sdk.picovr.com/developer-platform/sdk/PICO_OpenXR_SDK_220.zip",
+        "libs/android.arm64-v8a",
+    );
+
+    if matches!(selection, OpenXRLoadersSelection::OnlyPico) {
+        return;
+    }
 
     get_openxr_loader(
         "_quest1",
         "https://securecdn.oculus.com/binaries/download/?id=7577210995650755", // Version 64
         "OpenXR/Libs/Android/arm64-v8a/Release",
-    );
-
-    get_openxr_loader(
-        "_pico",
-        "https://sdk.picovr.com/developer-platform/sdk/PICO_OpenXR_SDK_220.zip",
-        "libs/android.arm64-v8a",
     );
 
     get_openxr_loader(
@@ -345,10 +372,12 @@ fn get_android_openxr_loaders() {
     );
 }
 
-pub fn build_android_deps(skip_admin_priv: bool) {
+pub fn build_android_deps(
+    skip_admin_priv: bool,
+    all_targets: bool,
+    openxr_loaders_selection: OpenXRLoadersSelection,
+) {
     let sh = Shell::new().unwrap();
-
-    update_submodules(&sh);
 
     if cfg!(windows) && !skip_admin_priv {
         choco_install(&sh, &["unzip", "llvm"]).unwrap();
@@ -357,16 +386,21 @@ pub fn build_android_deps(skip_admin_priv: bool) {
     cmd!(sh, "rustup target add aarch64-linux-android")
         .run()
         .unwrap();
-    cmd!(sh, "rustup target add armv7-linux-androideabi")
+    if all_targets {
+        cmd!(sh, "rustup target add armv7-linux-androideabi")
+            .run()
+            .unwrap();
+        cmd!(sh, "rustup target add x86_64-linux-android")
+            .run()
+            .unwrap();
+        cmd!(sh, "rustup target add i686-linux-android")
+            .run()
+            .unwrap();
+    }
+    cmd!(sh, "cargo install cbindgen").run().unwrap();
+    cmd!(sh, "cargo install cargo-ndk --version 3.5.4")
         .run()
         .unwrap();
-    cmd!(sh, "rustup target add x86_64-linux-android")
-        .run()
-        .unwrap();
-    cmd!(sh, "rustup target add i686-linux-android")
-        .run()
-        .unwrap();
-    cmd!(sh, "cargo install cargo-ndk cbindgen").run().unwrap();
     cmd!(
         sh,
         "cargo install --git https://github.com/zarik5/cargo-apk cargo-apk"
@@ -374,5 +408,5 @@ pub fn build_android_deps(skip_admin_priv: bool) {
     .run()
     .unwrap();
 
-    get_android_openxr_loaders();
+    get_android_openxr_loaders(openxr_loaders_selection);
 }
