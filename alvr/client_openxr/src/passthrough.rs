@@ -1,4 +1,5 @@
 use crate::extra_extensions::{PassthroughFB, PassthroughHTC};
+use alvr_common::error;
 use alvr_common::anyhow::{Result, bail};
 use alvr_session::PassthroughMode;
 use alvr_system_info::Platform;
@@ -38,7 +39,9 @@ impl PassthroughLayer<'_> {
         mode: Option<&PassthroughMode>,
     ) {
         if let Some(handle) = &mut self.handle_fb {
-            let _ = handle.update_style(session, mode);
+            if let Err(e) = handle.update_style(session, mode) {
+                error!("Failed to apply passthrough style: {e}");
+            }
         }
     }
 }

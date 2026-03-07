@@ -9,26 +9,24 @@ use std::{ffi::c_void, ptr, sync::LazyLock};
 
 type XrPassthroughColorLutMETA = u64;
 
-static TYPE_PASSTHROUGH_COLOR_LUT_DATA_META: LazyLock<xr::StructureType> =
-    LazyLock::new(|| xr::StructureType::from_raw(1000266000));
 static TYPE_PASSTHROUGH_COLOR_LUT_CREATE_INFO_META: LazyLock<xr::StructureType> =
     LazyLock::new(|| xr::StructureType::from_raw(1000266001));
 static TYPE_PASSTHROUGH_COLOR_MAP_LUT_META: LazyLock<xr::StructureType> =
-    LazyLock::new(|| xr::StructureType::from_raw(1000266002));
+    LazyLock::new(|| xr::StructureType::from_raw(1000266100));
+const PASSTHROUGH_COLOR_LUT_CHANNELS_RGBA_META: i32 = 2;
 
 #[repr(C)]
 struct XrPassthroughColorLutDataMETA {
-    ty: xr::StructureType,
-    next: *const c_void,
-    buffer: *const u8,
     buffer_size: u32,
+    buffer: *const u8,
 }
 
 #[repr(C)]
 struct XrPassthroughColorLutCreateInfoMETA {
     ty: xr::StructureType,
     next: *const c_void,
-    lut_type: u32,
+    channels: i32,
+    resolution: u32,
     data: XrPassthroughColorLutDataMETA,
 }
 
@@ -50,7 +48,7 @@ type PassthroughLayerSetStyleFB =
     unsafe extern "system" fn(sys::PassthroughLayerFB, *const sys::PassthroughStyleFB) -> sys::Result;
 
 struct MetaLutState {
-    resolution: u32,
+    config: MetaLutOverlayConfig,
     handle: XrPassthroughColorLutMETA,
     destroy_lut: DestroyPassthroughColorLutMETA,
 }
@@ -188,7 +186,7 @@ impl PassthroughFB {
         cfg: &MetaLutOverlayConfig,
     ) -> xr::Result<XrPassthroughColorLutMETA> {
         if let Some(state) = &self.meta_lut {
-            if state.resolution == cfg.lut_resolution {
+            if state.config == *cfg {
                 return Ok(state.handle);
             }
         }
@@ -200,17 +198,17 @@ impl PassthroughFB {
         let destroy_lut: DestroyPassthroughColorLutMETA =
             super::get_instance_proc(session, "xrDestroyPassthroughColorLutMETA")?;
 
-        let lut = generate_lut(cfg);
+        let resolution = cfg.lut_resolution.max(2);
+        let lut = generate_lut(cfg, resolution);
         let lut_data = XrPassthroughColorLutDataMETA {
-            ty: *TYPE_PASSTHROUGH_COLOR_LUT_DATA_META,
-            next: ptr::null(),
-            buffer: lut.as_ptr(),
             buffer_size: lut.len() as u32,
+            buffer: lut.as_ptr(),
         };
         let create_info = XrPassthroughColorLutCreateInfoMETA {
             ty: *TYPE_PASSTHROUGH_COLOR_LUT_CREATE_INFO_META,
             next: ptr::null(),
-            lut_type: 0,
+            channels: PASSTHROUGH_COLOR_LUT_CHANNELS_RGBA_META,
+            resolution,
             data: lut_data,
         };
 
@@ -218,7 +216,7 @@ impl PassthroughFB {
         unsafe { super::xr_res(create_lut(self.handle, &create_info, &mut handle))? };
 
         self.meta_lut = Some(MetaLutState {
-            resolution: cfg.lut_resolution,
+            config: cfg.clone(),
             handle,
             destroy_lut,
         });
@@ -248,8 +246,7 @@ impl Drop for PassthroughFB {
     }
 }
 
-fn generate_lut(cfg: &MetaLutOverlayConfig) -> Vec<u8> {
-    let resolution = cfg.lut_resolution.max(2);
+fn generate_lut(cfg: &MetaLutOverlayConfig, resolution: u32) -> Vec<u8> {
     let mut out = vec![0_u8; (resolution * resolution * resolution * 4) as usize];
 
     for r in 0..resolution {
@@ -262,7 +259,7 @@ fn generate_lut(cfg: &MetaLutOverlayConfig) -> Vec<u8> {
                 let (hue_deg, sat, val) = rgb_to_hsv_deg(rf, gf, bf);
                 let alpha = lut_alpha(hue_deg, sat, val, cfg);
 
-                let idx = ((r * resolution * resolution + g * resolution + b) * 4) as usize;
+                let idx = ((r + g * resolution + b * resolution * resolution) * 4) as usize;
                 out[idx] = (rf * 255.0) as u8;
                 out[idx + 1] = (gf * 255.0) as u8;
                 out[idx + 2] = (bf * 255.0) as u8;

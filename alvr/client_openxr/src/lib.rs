@@ -15,12 +15,12 @@ use alvr_common::{
     parking_lot::RwLock,
 };
 use alvr_graphics::GraphicsContext;
-use alvr_session::{BodyTrackingBDConfig, BodyTrackingSourcesConfig, PassthroughMode, PerformanceLevel};
+use alvr_session::{BodyTrackingBDConfig, BodyTrackingSourcesConfig, PerformanceLevel};
 use alvr_system_info::Platform;
 use extra_extensions::{
     BD_BODY_TRACKING_EXTENSION_NAME, BD_MOTION_TRACKING_EXTENSION_NAME,
     META_BODY_TRACKING_FIDELITY_EXTENSION_NAME, META_BODY_TRACKING_FULL_BODY_EXTENSION_NAME,
-    META_DETACHED_CONTROLLERS_EXTENSION_NAME, META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME,
+    META_DETACHED_CONTROLLERS_EXTENSION_NAME,
     META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME, PICO_CONFIGURATION_EXTENSION_NAME,
 };
 use interaction::{InteractionContext, InteractionSourcesConfig};
@@ -187,17 +187,21 @@ pub fn entry_point() {
 
     let available_extensions = xr_entry.enumerate_extensions().unwrap();
     info!("OpenXR available extensions: {available_extensions:#?}");
-    info!(
-        "Extra available extensions: {:#?}",
-        available_extensions
-            .other
-            .iter()
-            .map(|vec| CStr::from_bytes_with_nul(vec)
+    let available_other_exts = available_extensions
+        .other
+        .iter()
+        .map(|vec| {
+            CStr::from_bytes_with_nul(vec)
                 .unwrap()
                 .to_str()
                 .unwrap()
-                .to_owned())
-            .collect::<Vec<_>>()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    info!("Extra available extensions: {available_other_exts:#?}");
+    info!(
+        "XR_META_passthrough_color_lut available: {}",
+        available_extensions.meta_passthrough_color_lut
     );
 
     // todo: switch to vulkan
@@ -224,6 +228,7 @@ pub fn entry_point() {
     exts.htc_passthrough = available_extensions.htc_passthrough;
     exts.htc_vive_focus3_controller_interaction =
         available_extensions.htc_vive_focus3_controller_interaction;
+    exts.meta_passthrough_color_lut = available_extensions.meta_passthrough_color_lut;
     #[cfg(target_os = "android")]
     {
         exts.khr_android_create_instance = true;
@@ -239,7 +244,6 @@ pub fn entry_point() {
                 META_BODY_TRACKING_FIDELITY_EXTENSION_NAME,
                 META_SIMULTANEOUS_HANDS_AND_CONTROLLERS_EXTENSION_NAME,
                 META_DETACHED_CONTROLLERS_EXTENSION_NAME,
-                META_PASSTHROUGH_COLOR_LUT_EXTENSION_NAME,
                 BD_BODY_TRACKING_EXTENSION_NAME,
                 BD_MOTION_TRACKING_EXTENSION_NAME,
                 PICO_CONFIGURATION_EXTENSION_NAME,
@@ -262,6 +266,7 @@ pub fn entry_point() {
                 .to_owned()
         })
         .collect::<Vec<_>>();
+    info!("Enabled extra extensions: {other_exts:#?}");
 
     let xr_instance = xr_entry
         .create_instance(
@@ -492,6 +497,15 @@ pub fn entry_point() {
 
                         if !context.uses_passthrough() {
                             passthrough_layer = None;
+                        } else {
+                            if passthrough_layer.is_none() {
+                                passthrough_layer = PassthroughLayer::new(&xr_session, platform).ok();
+                            }
+
+                            if let Some(passthrough_layer) = &mut passthrough_layer {
+                                passthrough_layer
+                                    .update_style(&xr_session, context.passthrough_mode());
+                            }
                         }
 
                         stream_context = Some(context);
@@ -609,12 +623,6 @@ pub fn entry_point() {
                 };
 
             let projection_layer = layer.build();
-
-            let projection_layer = layer.build();
-            let is_meta_lut_overlay = stream_context
-                .as_ref()
-                .and_then(|stream| stream.config.passthrough.as_ref())
-                .is_some_and(|mode| matches!(mode, PassthroughMode::MetaLutOverlay(_)));
 
             let layers: &[&xr::CompositionLayerBase<_>] =
                 if let Some(passthrough_layer) = &passthrough_layer {

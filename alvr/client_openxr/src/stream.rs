@@ -261,6 +261,10 @@ impl StreamContext {
             .is_some_and(|mode| matches!(mode, PassthroughMode::MetaLutOverlay(_)))
     }
 
+    pub fn passthrough_mode(&self) -> Option<&PassthroughMode> {
+        self.config.passthrough.as_ref()
+    }
+
     pub fn update_reference_space(&mut self) {
         self.input_thread_running.set(false);
 

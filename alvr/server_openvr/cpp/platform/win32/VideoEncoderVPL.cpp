@@ -153,8 +153,9 @@ void VideoEncoderVPL::InitTransferTex() {
                                              0,
                                              D3D11_RESOURCE_MISC_SHARED };
 
-    HRESULT hr
-        = m_pD3DRender->GetDevice()->CreateTexture2D(&transferTexDesc, nullptr, &m_transferTex);
+    HRESULT hr = m_pD3DRender->GetDevice()->CreateTexture2D(
+        &transferTexDesc, nullptr, m_transferTex.ReleaseAndGetAddressOf()
+    );
     if (FAILED(hr))
         ERROR_THROW("failed to create transfer texture HR=%p %ls", hr, GetErrorStr(hr).c_str());
 }
@@ -214,14 +215,14 @@ void VideoEncoderVPL::InitVplEncode() {
 }
 
 mfxFrameSurface1* VideoEncoderVPL::VplImportTexture(ID3D11Texture2D* texture) {
-    m_pD3DRender->GetContext()->CopyResource(m_transferTex.p, texture);
+    m_pD3DRender->GetContext()->CopyResource(m_transferTex.Get(), texture);
 
     mfxSurfaceD3D11Tex2D extSurfD3D11 = {};
     extSurfD3D11.SurfaceInterface.Header.SurfaceType = MFX_SURFACE_TYPE_D3D11_TEX2D;
     extSurfD3D11.SurfaceInterface.Header.SurfaceFlags
         = MFX_SURFACE_FLAG_IMPORT_SHARED | MFX_SURFACE_FLAG_IMPORT_COPY;
     extSurfD3D11.SurfaceInterface.Header.StructSize = sizeof(mfxSurfaceD3D11Tex2D);
-    extSurfD3D11.texture2D = m_transferTex.p;
+    extSurfD3D11.texture2D = m_transferTex.Get();
 
     mfxFrameSurface1* encSurface = nullptr;
     VPL_VERIFY(m_vplMemoryInterface->ImportFrameSurface(
